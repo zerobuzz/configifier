@@ -25,7 +25,7 @@ flag profiling
 
 library
   hs-source-dirs:
-      src tests
+      src
   default-language:
       Haskell2010
   exposed-modules:
@@ -54,7 +54,7 @@ executable configifier-example
   default-language:
       Haskell2010
   hs-source-dirs:
-      examples src tests
+      examples
   main-is:
       Main.hs
   other-modules:
