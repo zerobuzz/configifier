@@ -1,51 +1,32 @@
-{-# LANGUAGE BangPatterns                             #-}
-{-# LANGUAGE DataKinds                                #-}
-{-# LANGUAGE DeriveDataTypeable                       #-}
-{-# LANGUAGE DeriveFunctor                            #-}
-{-# LANGUAGE DeriveGeneric                            #-}
-{-# LANGUAGE ExistentialQuantification                #-}
-{-# LANGUAGE FlexibleContexts                         #-}
-{-# LANGUAGE FlexibleInstances                        #-}
-{-# LANGUAGE GADTs                                    #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving               #-}
-{-# LANGUAGE InstanceSigs                             #-}
-{-# LANGUAGE MultiParamTypeClasses                    #-}
-{-# LANGUAGE NoImplicitPrelude                        #-}
-{-# LANGUAGE OverlappingInstances                     #-}
-{-# LANGUAGE OverloadedStrings                        #-}
-{-# LANGUAGE PackageImports                           #-}
-{-# LANGUAGE PatternGuards                            #-}
-{-# LANGUAGE PolyKinds                                #-}
-{-# LANGUAGE QuasiQuotes                              #-}
-{-# LANGUAGE RankNTypes                               #-}
-{-# LANGUAGE ScopedTypeVariables                      #-}
-{-# LANGUAGE StandaloneDeriving                       #-}
-{-# LANGUAGE TemplateHaskell                          #-}
-{-# LANGUAGE TupleSections                            #-}
-{-# LANGUAGE TypeOperators                            #-}
-{-# LANGUAGE TypeSynonymInstances                     #-}
-{-# LANGUAGE ViewPatterns                             #-}
+{-# LANGUAGE DeriveDataTypeable    #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE PolyKinds             #-}
+{-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE TypeOperators         #-}
 
-{-# LANGUAGE UndecidableInstances #-}  -- should only be required to run 'HasParseCommandLine'; remove later!
+{-# LANGUAGE UndecidableInstances  #-}  -- should only be required to run 'HasParseCommandLine'; remove later!
 
 {-# OPTIONS  #-}
 
 module Data.Configifier
 where
 
-import Control.Applicative
+import Control.Applicative ((<$>), (<*>), (<|>))
 import Control.Exception (assert)
 import Control.Monad.Error.Class (catchError)
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
-import Data.CaseInsensitive
+import Data.CaseInsensitive (mk)
 import Data.Function (on)
 import Data.List (nubBy)
 import Data.Maybe (catMaybes)
-import Data.String.Conversions
-import Data.Typeable
+import Data.String.Conversions (ST, SBS, cs)
+import Data.Typeable (Typeable, Proxy(Proxy))
 import GHC.TypeLits (KnownSymbol, symbolVal)
-import Prelude
-import Safe
+import Safe (readMay)
 
 -- (FIXME: can i replace aeson entirely with yaml?  right now, the mix
 -- of use of both is rather chaotic.)
