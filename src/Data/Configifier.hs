@@ -385,7 +385,6 @@ instance HasRenderDoc ConfigFile where
         indent :: String -> [String] -> [String]
         indent start = lines . (start <>) . intercalate "\n  "
 
-
 instance HasRenderDoc ShellEnv where
     renderDoc Proxy doc = cs . unlines $
         "" :
@@ -423,8 +422,7 @@ instance HasRenderDoc CommandLine where
         "Command Line Arguments" :
         "----------------------" :
         "" :
-        f doc ++
+        "See `shell environment`.  (Anything you can set with a shell" :
+        "variable, you can also set with a long arg.)" :
         "" :
         []
-      where
-        f _ = []
