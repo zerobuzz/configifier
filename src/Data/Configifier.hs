@@ -268,6 +268,42 @@ instance (KnownSymbol path, KnownSymbol descr, KnownSymbol sel, path ~ sel)
     (>.) (_ :>: _ :> v :| _) Proxy = v
 
 
+-- a better way to select:
+
+
+-- (defunct; not sure if this is even possible in principle.)
+
+
+class Quiz cfg choice field where
+    type cfg >>. choice
+    quiz :: cfg -> field
+
+-- (if i put this infix declaration into the 'Quiz' class body, ghc
+-- 7.8.4 sais @‘>>.’ is not a (visible) method of class ‘Quiz’@.  not
+-- sure if this is indended behavior.)
+infixl 9 >>.
+
+instance (KnownSymbol path, KnownSymbol choice, path ~ choice)
+        => Quiz (path :> v) choice v where
+    type (path :> v) >>. choice = (path :> v) -> v
+    quiz (Proxy :> v) = v
+
+instance (Quiz o1 choice v) => Quiz (o1 :| o2) choice v where
+    type (o1 :| o2) >>. choice = o1 >>. choice
+    quiz (o1 :| o2) = (quiz :: o1 >>. choice) o1 :: v
+
+
+
+{-
+instance (Quiz o2 choice v) => Quiz (o1 :| o2) choice v where
+    type (o1 :| o2) >>. choice = o2 >>. choice
+    quiz (o1 :| o2) = quiz o2
+-}
+
+
+
+
+
 -- * merge configs
 
 -- | Merge two json trees such that the latter overwrites nodes in the

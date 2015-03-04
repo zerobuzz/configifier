@@ -81,3 +81,11 @@ main = do
 
     putStrLn $ ppShow (sources, cfg)
     putStrLn . either show (cs . Yaml.encode) $ cfg
+{-
+    print $ ((quiz :: Cfg >>. "blu" >>. "lii") cfg :: Bool)
+
+    let xs :: [Cfg'] = (quiz :: Cfg >>. "uGH") cfg
+        ys :: [Bool] = (quiz :: Cfg' >>. "blu" >>. "lii") <$> xs
+
+    print (xs, ys)
+-}
