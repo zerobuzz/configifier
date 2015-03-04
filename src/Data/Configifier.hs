@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable    #-}
+{-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
@@ -7,6 +8,7 @@
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE ViewPatterns          #-}
 
 {-# LANGUAGE UndecidableInstances  #-}  -- should only be required to run 'HasParseCommandLine'; remove later!
 
@@ -20,11 +22,12 @@ import Control.Exception (assert)
 import Control.Monad.Error.Class (catchError)
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
 import Data.CaseInsensitive (mk)
+import Data.Char (toUpper)
 import Data.Function (on)
-import Data.List (nubBy)
+import Data.List (nubBy, intercalate, sort)
 import Data.Maybe (catMaybes)
-import Data.String.Conversions (ST, SBS, cs)
-import Data.Typeable (Typeable, Proxy(Proxy))
+import Data.String.Conversions (ST, SBS, cs, (<>))
+import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
 import GHC.TypeLits (KnownSymbol, symbolVal)
 import Safe (readMay)
 
@@ -68,6 +71,10 @@ data Source =
     | ShellEnv [(String, String)]
     | CommandLine [String]
   deriving (Eq, Ord, Show, Typeable)
+
+data ConfigFile
+data ShellEnv
+data CommandLine
 
 data Error =
       InvalidJSON String
@@ -296,7 +303,7 @@ merge = foldl (<<>>) Aeson.Null
 mergeAndCatch :: [Either Error Aeson.Value] -> Either Error Aeson.Value
 mergeAndCatch = foldl (\ ev ev' -> (<<>>) <$> c'tcha ev <*> c'tcha ev') (Right Null)
   where
-    -- (this name is a sound from the 'samurai jack' title tune.  it
+    -- (this name is a sound from the samurai jack title tune.  it
     -- has nothing to do with this, but it sounds nice.  go watch
     -- samurai jack!)
     c'tcha = (`catchError` \ _ -> return Null)
@@ -304,7 +311,118 @@ mergeAndCatch = foldl (\ ev ev' -> (<<>>) <$> c'tcha ev <*> c'tcha ev') (Right N
 
 -- * docs.
 
+docs :: ( HasToDoc a
+        , HasRenderDoc ConfigFile
+        , HasRenderDoc ShellEnv
+        , HasRenderDoc CommandLine
+        ) => Proxy a -> ST
+docs proxy = renderDoc (Proxy :: Proxy ConfigFile)  (toDoc proxy)
+          <> renderDoc (Proxy :: Proxy ShellEnv)    (toDoc proxy)
+          <> renderDoc (Proxy :: Proxy CommandLine) (toDoc proxy)
 
--- writeDocs :: forall a . (ToJSON a) => a -> SBS
--- writeDocs v | docs (Proxy :: Proxy a) == Nothing = Yaml.encode v
--- writeDocs _ = error "writeDocs"  -- @(toJSON -> Object m) =
+data Doc =
+    DocDict [(String, Maybe String, Doc)]
+  | DocList Doc
+  | DocBase String
+  deriving (Eq, Ord, Show, Read, Typeable)
+
+concatDoc :: Doc -> Doc -> Doc
+concatDoc (DocDict xs) (DocDict ys) = DocDict . sort $ xs ++ ys
+concatDoc bad bad' = error $ "concatDoc: " ++ show (bad, bad')
+
+
+class HasToDoc a where
+    toDoc :: Proxy a -> Doc
+
+_makeDocPair :: (KnownSymbol path, KnownSymbol descr, HasToDoc v)
+      => Proxy path -> Maybe (Proxy descr) -> Proxy v -> Doc
+_makeDocPair pathProxy descrProxy vProxy = DocDict [(symbolVal pathProxy, symbolVal <$> descrProxy, toDoc vProxy)]
+
+instance (KnownSymbol path, HasToDoc v) => HasToDoc (path :> v) where
+    toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Nothing :: Maybe (Proxy path)) (Proxy :: Proxy v)
+
+instance (KnownSymbol path, KnownSymbol descr, HasToDoc v) =>  HasToDoc (path :>: descr :> v) where
+    toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Just (Proxy :: Proxy descr)) (Proxy :: Proxy v)
+
+instance (HasToDoc o1, HasToDoc o2) => HasToDoc (o1 :| o2) where
+    toDoc Proxy = toDoc (Proxy :: Proxy o1) `concatDoc` toDoc (Proxy :: Proxy o2)
+
+instance HasToDoc a => HasToDoc [a] where
+    toDoc Proxy = DocList . toDoc $ (Proxy :: Proxy a)
+
+instance HasToDoc ST where
+    toDoc Proxy = DocBase "string"
+
+instance HasToDoc Int where
+    toDoc Proxy = DocBase "number"
+
+instance HasToDoc Bool where
+    toDoc Proxy = DocBase "boolean"
+
+
+class HasRenderDoc t where
+    renderDoc :: Proxy t -> Doc -> ST
+
+instance HasRenderDoc ConfigFile where
+    renderDoc Proxy doc = cs . unlines $
+        "" :
+        "Config File" :
+        "-----------" :
+        "" :
+        f doc ++
+        "" :
+        []
+      where
+        f :: Doc -> [String]
+        f (DocDict cs) = concat $ map g cs
+        f (DocList doc) = indent "- " $ f doc
+        f (DocBase base) = [base]
+
+        g :: (String, Maybe String, Doc) -> [String]
+        g (key, Just mDescr, subdoc) = ("# " <> mDescr) : (key <> ":") : indent "  " (f subdoc)
+        g (key, Nothing,     subdoc) =                    (key <> ":") : indent "  " (f subdoc)
+
+        indent :: String -> [String] -> [String]
+        indent start = lines . (start <>) . intercalate "\n  "
+
+instance HasRenderDoc ShellEnv where
+    renderDoc Proxy doc = cs . unlines $
+        "" :
+        "Shell Environment Variables" :
+        "---------------------------" :
+        "" :
+        (f [] doc) ++
+        "" :
+        []
+      where
+        f :: [(String, Maybe String)] -> Doc -> [String]
+        f acc (DocDict xs) = concat $ map (g acc) xs
+        f acc (DocList doc) = f acc doc
+        f (reverse -> acc) (DocBase base) =
+                shellvar :
+                ("    type: " ++ base) :
+                (let xs = catMaybes (mkd <$> acc) in
+                  if null xs then [] else "    documented components:" : xs) ++
+                "" :
+                []
+          where
+            shellvar :: String
+            shellvar = map toUpper . intercalate "_" . map fst $ acc
+
+            mkd :: (String, Maybe String) -> Maybe String
+            mkd (key, Nothing) = Nothing
+            mkd (key, Just descr) = Just $ "        " ++ (toUpper <$> key) ++ ": " ++ descr
+
+        g :: [(String, Maybe String )] -> (String, Maybe String, Doc) -> [String]
+        g acc (key, descr, subdoc) = f ((key, descr) : acc) subdoc
+
+instance HasRenderDoc CommandLine where
+    renderDoc Proxy doc = cs . unlines $
+        "" :
+        "Command Line Arguments" :
+        "----------------------" :
+        "" :
+        "See `shell environment`.  (Anything you can set with a shell" :
+        "variable, you can also set with a long arg.)" :
+        "" :
+        []

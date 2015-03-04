@@ -1,30 +1,7 @@
-{-# LANGUAGE BangPatterns                             #-}
 {-# LANGUAGE DataKinds                                #-}
-{-# LANGUAGE DeriveDataTypeable                       #-}
-{-# LANGUAGE DeriveFunctor                            #-}
-{-# LANGUAGE DeriveGeneric                            #-}
-{-# LANGUAGE ExistentialQuantification                #-}
-{-# LANGUAGE FlexibleContexts                         #-}
-{-# LANGUAGE FlexibleInstances                        #-}
-{-# LANGUAGE GADTs                                    #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving               #-}
-{-# LANGUAGE InstanceSigs                             #-}
-{-# LANGUAGE MultiParamTypeClasses                    #-}
-{-# LANGUAGE NoImplicitPrelude                        #-}
-{-# LANGUAGE OverlappingInstances                     #-}
 {-# LANGUAGE OverloadedStrings                        #-}
-{-# LANGUAGE PackageImports                           #-}
-{-# LANGUAGE PatternGuards                            #-}
-{-# LANGUAGE PolyKinds                                #-}
-{-# LANGUAGE QuasiQuotes                              #-}
-{-# LANGUAGE RankNTypes                               #-}
 {-# LANGUAGE ScopedTypeVariables                      #-}
-{-# LANGUAGE StandaloneDeriving                       #-}
-{-# LANGUAGE TemplateHaskell                          #-}
-{-# LANGUAGE TupleSections                            #-}
 {-# LANGUAGE TypeOperators                            #-}
-{-# LANGUAGE TypeSynonymInstances                     #-}
-{-# LANGUAGE ViewPatterns                             #-}
 
 {-# OPTIONS  #-}
 
@@ -39,6 +16,7 @@ import Text.Show.Pretty (ppShow)
 import System.Environment
 
 import qualified Data.ByteString as SBS
+import qualified Data.Text.IO as ST
 import qualified Data.Yaml as Yaml
 
 import Data.Configifier
@@ -47,8 +25,8 @@ import Data.Configifier
 -- * the config types
 
 type Cfg =
-     "bla" :>: "description of bla" :> Int
-  :| "blu" :> SubCfg
+     "bla" :> Int
+  :| "blu" :>: "description of blu" :> SubCfg
   :| "uGH" :>: "...  and something about uGH" :> [Cfg']
 
 type Cfg' =
@@ -56,7 +34,7 @@ type Cfg' =
   :| "blu" :> SubCfg
 
 type SubCfg =
-     "lii" :> Bool
+     "lii" :>: "lii-desc" :> Bool
 
 
 -- | you can write sample configs in haskell syntax.  (it's not very
@@ -64,9 +42,9 @@ type SubCfg =
 -- suite on how to access fields in cfg from here on.)
 defaultCfg :: Cfg
 defaultCfg =
-     Proxy :>: Proxy :> 3
-  :| Proxy :> (Proxy :> False)
-  :| Proxy :>: Proxy :> [Proxy :> "drei" :| Proxy :> Proxy :> True, Proxy :> "vier" :| Proxy :> Proxy :> False]
+     Proxy :> 3
+  :| Proxy :>: Proxy :> (Proxy :>: Proxy :> False)
+  :| Proxy :>: Proxy :> [Proxy :> "drei" :| Proxy :> Proxy :>: Proxy :> True, Proxy :> "vier" :| Proxy :> Proxy :>: Proxy :> False]
 
 
 main :: IO ()
@@ -77,7 +55,12 @@ main = do
         , CommandLine <$> getArgs
         ]
 
-    let cfg :: Either Error Cfg = configify sources
+    -- putStrLn $ ppShow sources
 
-    putStrLn $ ppShow (sources, cfg)
-    putStrLn . either show (cs . Yaml.encode) $ cfg
+    ST.putStrLn $ docs (Proxy :: Proxy Cfg)
+
+    case configify sources of
+        Left e -> print e
+        Right (cfg :: Cfg) -> do
+            putStrLn $ ppShow cfg
+            putStrLn . cs . Yaml.encode $ cfg
