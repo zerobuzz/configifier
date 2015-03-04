@@ -37,17 +37,19 @@ misc = describe "misc" $ do
     describe "<<>>" $ do
         it "does not crash" . property $ \ a b -> (length . show $ a <<>> b) > 0
 
+{-
     describe "(>.)" $ do
         it "works (unit)" $ do
             (cfg >. (Proxy :: Proxy "bla") :: Int) `shouldBe` 3
             ((cfg >. (Proxy :: Proxy "blu") :: SubCfg) >. (Proxy :: Proxy "lii") :: Bool) `shouldBe` False
             ((>. (Proxy :: Proxy "go")) <$> (cfg >. (Proxy :: Proxy "uGH") :: [Cfg']) :: [ST]) `shouldBe` ["drei","vier"]
+-}
 
     describe "FromJSON, ToJSON" $ do
         it "is mutually inverse" $ do
-            simpleJSONTest False (cfg >. (Proxy :: Proxy "blu") :: SubCfg)
-            simpleJSONTest False (cfg >. (Proxy :: Proxy "bla") :: Int)
             simpleJSONTest False cfg
+            simpleJSONTest False subCfg
+            sequence_ (simpleJSONTest False <$> cfg's)
 
     describe "parseShellEnv" $ do
         it "works" $ do
@@ -77,5 +79,14 @@ type SubCfg =
 cfg :: Cfg
 cfg =
      Proxy :>: Proxy :> 3
-  :| Proxy :> (Proxy :> False)
-  :| Proxy :>: Proxy :> [Proxy :> "drei" :| Proxy :> Proxy :> True, Proxy :> "vier" :| Proxy :> Proxy :> False]
+  :| Proxy :> subCfg
+  :| Proxy :>: Proxy :> cfg's
+
+cfg's :: [Cfg']
+cfg's =
+    [ Proxy :> "drei" :| Proxy :> Proxy :> True
+    , Proxy :> "vier" :| Proxy :> Proxy :> False
+    ]
+
+subCfg :: SubCfg
+subCfg = Proxy :> False
