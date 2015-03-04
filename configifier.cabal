@@ -12,7 +12,7 @@ license-file:        LICENSE
 author:              Matthias Fischmann
 maintainer:          mf@zerobuzz.net
 copyright:           zerobuzz.net
-category:
+category:            Configuration, Data
 build-type:          Simple
 cabal-version:       >=1.10
 
@@ -59,7 +59,7 @@ executable configifier-example
       Main.hs
   other-modules:
   ghc-options:
-      -O2 -Wall -threaded -rtsopts
+      -Wall -threaded -rtsopts
   if flag(profiling)
       ghc-options:
           -auto-all -caf-all -fforce-recomp
@@ -106,7 +106,7 @@ test-suite tests
     , Spec
     , Test.Arbitrary
   ghc-options:
-      -O2 -Wall -threaded -rtsopts
+      -Wall -threaded -rtsopts
   cpp-options:
       -DGHC_GENERICS
   build-depends:

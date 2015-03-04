@@ -1,30 +1,7 @@
-{-# LANGUAGE BangPatterns                             #-}
 {-# LANGUAGE DataKinds                                #-}
-{-# LANGUAGE DeriveDataTypeable                       #-}
-{-# LANGUAGE DeriveFunctor                            #-}
-{-# LANGUAGE DeriveGeneric                            #-}
-{-# LANGUAGE ExistentialQuantification                #-}
-{-# LANGUAGE FlexibleContexts                         #-}
-{-# LANGUAGE FlexibleInstances                        #-}
-{-# LANGUAGE GADTs                                    #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving               #-}
-{-# LANGUAGE InstanceSigs                             #-}
-{-# LANGUAGE MultiParamTypeClasses                    #-}
-{-# LANGUAGE NoImplicitPrelude                        #-}
 {-# LANGUAGE OverlappingInstances                     #-}
 {-# LANGUAGE OverloadedStrings                        #-}
-{-# LANGUAGE PackageImports                           #-}
-{-# LANGUAGE PatternGuards                            #-}
-{-# LANGUAGE PolyKinds                                #-}
-{-# LANGUAGE QuasiQuotes                              #-}
-{-# LANGUAGE RankNTypes                               #-}
-{-# LANGUAGE ScopedTypeVariables                      #-}
-{-# LANGUAGE StandaloneDeriving                       #-}
-{-# LANGUAGE TemplateHaskell                          #-}
-{-# LANGUAGE TupleSections                            #-}
 {-# LANGUAGE TypeOperators                            #-}
-{-# LANGUAGE TypeSynonymInstances                     #-}
-{-# LANGUAGE ViewPatterns                             #-}
 
 {-# OPTIONS  #-}
 
