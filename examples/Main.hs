@@ -39,6 +39,8 @@ import Text.Show.Pretty (ppShow)
 import System.Environment
 
 import qualified Data.ByteString as SBS
+import qualified Data.Text as ST
+import qualified Data.Text.IO as ST
 import qualified Data.Yaml as Yaml
 
 import Data.Configifier
@@ -77,8 +79,12 @@ main = do
         , CommandLine <$> getArgs
         ]
 
+    -- putStrLn $ ppShow sources
+
+    ST.putStrLn $ docs (Proxy :: Proxy Cfg)
+
     case configify sources of
         Left e -> print e
         Right (cfg :: Cfg) -> do
-            putStrLn $ ppShow (sources, cfg)
+            putStrLn $ ppShow cfg
             putStrLn . cs . Yaml.encode $ cfg

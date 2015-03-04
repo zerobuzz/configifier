@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable    #-}
+{-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
@@ -23,7 +24,7 @@ import Data.CaseInsensitive (mk)
 import Data.Function (on)
 import Data.List (nubBy)
 import Data.Maybe (catMaybes)
-import Data.String.Conversions (ST, SBS, cs)
+import Data.String.Conversions (ST, SBS, cs, (<>))
 import Data.Typeable (Typeable, Proxy(Proxy))
 import GHC.TypeLits (KnownSymbol, symbolVal)
 import Safe (readMay)
@@ -68,6 +69,10 @@ data Source =
     | ShellEnv [(String, String)]
     | CommandLine [String]
   deriving (Eq, Ord, Show, Typeable)
+
+data ConfigFile
+data ShellEnv
+data CommandLine
 
 data Error =
       InvalidJSON String
@@ -304,7 +309,30 @@ mergeAndCatch = foldl (\ ev ev' -> (<<>>) <$> c'tcha ev <*> c'tcha ev') (Right N
 
 -- * docs.
 
+docs :: ( HasToDoc a
+        , HasRenderDoc ConfigFile
+        , HasRenderDoc ShellEnv
+        , HasRenderDoc CommandLine
+        ) => Proxy a -> ST
+docs proxy = renderDoc (Proxy :: Proxy ConfigFile)  (toDoc proxy)
+          <> renderDoc (Proxy :: Proxy ShellEnv)    (toDoc proxy)
+          <> renderDoc (Proxy :: Proxy CommandLine) (toDoc proxy)
 
--- writeDocs :: forall a . (ToJSON a) => a -> SBS
--- writeDocs v | docs (Proxy :: Proxy a) == Nothing = Yaml.encode v
--- writeDocs _ = error "writeDocs"  -- @(toJSON -> Object m) =
+type Doc = Aeson.Value
+
+class HasToDoc a where
+    toDoc :: Proxy a -> Doc
+
+
+
+class HasRenderDoc t where
+    renderDoc :: Proxy t -> Doc -> ST
+
+instance HasRenderDoc ConfigFile where
+    renderDoc Proxy = _
+
+instance HasRenderDoc ShellEnv where
+    renderDoc Proxy = _
+
+instance HasRenderDoc CommandLine where
+    renderDoc Proxy = _
