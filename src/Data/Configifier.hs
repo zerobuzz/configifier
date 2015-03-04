@@ -373,7 +373,18 @@ instance HasRenderDoc ConfigFile where
         "" :
         []
       where
-        f _ = []
+        f :: Doc -> [String]
+        f (DocDict cs) = concat $ map g cs
+        f (DocList doc) = indent "- " $ f doc
+        f (DocBase base) = [base]
+
+        g :: (String, Maybe String, Doc) -> [String]
+        g (key, Just mDescr, subdoc) = ("# " <> mDescr) : (key <> ":") : indent "  " (f subdoc)
+        g (key, Nothing,     subdoc) =                    (key <> ":") : indent "  " (f subdoc)
+
+        indent :: String -> [String] -> [String]
+        indent start = lines . (start <>) . intercalate "\n  "
+
 
 instance HasRenderDoc ShellEnv where
     renderDoc Proxy doc = cs . unlines $
