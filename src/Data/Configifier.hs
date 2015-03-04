@@ -8,6 +8,7 @@
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE ViewPatterns          #-}
 
 {-# LANGUAGE UndecidableInstances  #-}  -- should only be required to run 'HasParseCommandLine'; remove later!
 
@@ -21,11 +22,12 @@ import Control.Exception (assert)
 import Control.Monad.Error.Class (catchError)
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
 import Data.CaseInsensitive (mk)
+import Data.Char (toUpper)
 import Data.Function (on)
-import Data.List (nubBy)
+import Data.List (nubBy, intercalate, sort)
 import Data.Maybe (catMaybes)
 import Data.String.Conversions (ST, SBS, cs, (<>))
-import Data.Typeable (Typeable, Proxy(Proxy))
+import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
 import GHC.TypeLits (KnownSymbol, symbolVal)
 import Safe (readMay)
 
@@ -318,21 +320,100 @@ docs proxy = renderDoc (Proxy :: Proxy ConfigFile)  (toDoc proxy)
           <> renderDoc (Proxy :: Proxy ShellEnv)    (toDoc proxy)
           <> renderDoc (Proxy :: Proxy CommandLine) (toDoc proxy)
 
-type Doc = Aeson.Value
+data Doc =
+    DocDict [(String, Maybe String, Doc)]
+  | DocList Doc
+  | DocBase String
+  deriving (Eq, Ord, Show, Read, Typeable)
+
+concatDoc :: Doc -> Doc -> Doc
+concatDoc (DocDict xs) (DocDict ys) = DocDict . sort $ xs ++ ys
+concatDoc bad bad' = error $ "concatDoc: " ++ show (bad, bad')
+
 
 class HasToDoc a where
     toDoc :: Proxy a -> Doc
 
+_makeDocPair :: (KnownSymbol path, KnownSymbol descr, HasToDoc v)
+      => Proxy path -> Maybe (Proxy descr) -> Proxy v -> Doc
+_makeDocPair pathProxy descrProxy vProxy = DocDict [(symbolVal pathProxy, symbolVal <$> descrProxy, toDoc vProxy)]
+
+instance (KnownSymbol path, HasToDoc v) => HasToDoc (path :> v) where
+    toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Nothing :: Maybe (Proxy path)) (Proxy :: Proxy v)
+
+instance (KnownSymbol path, KnownSymbol descr, HasToDoc v) =>  HasToDoc (path :>: descr :> v) where
+    toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Just (Proxy :: Proxy descr)) (Proxy :: Proxy v)
+
+instance (HasToDoc o1, HasToDoc o2) => HasToDoc (o1 :| o2) where
+    toDoc Proxy = toDoc (Proxy :: Proxy o1) `concatDoc` toDoc (Proxy :: Proxy o2)
+
+instance HasToDoc a => HasToDoc [a] where
+    toDoc Proxy = DocList . toDoc $ (Proxy :: Proxy a)
+
+instance HasToDoc ST where
+    toDoc Proxy = DocBase "string"
+
+instance HasToDoc Int where
+    toDoc Proxy = DocBase "number"
+
+instance HasToDoc Bool where
+    toDoc Proxy = DocBase "boolean"
 
 
 class HasRenderDoc t where
     renderDoc :: Proxy t -> Doc -> ST
 
 instance HasRenderDoc ConfigFile where
-    renderDoc Proxy = _
+    renderDoc Proxy doc = cs . unlines $
+        "" :
+        "Config File" :
+        "-----------" :
+        "" :
+        f doc ++
+        "" :
+        []
+      where
+        f _ = []
 
 instance HasRenderDoc ShellEnv where
-    renderDoc Proxy = _
+    renderDoc Proxy doc = cs . unlines $
+        "" :
+        "Shell Environment Variables" :
+        "---------------------------" :
+        "" :
+        (f [] doc) ++
+        "" :
+        []
+      where
+        f :: [(String, Maybe String)] -> Doc -> [String]
+        f acc (DocDict xs) = concat $ map (g acc) xs
+        f acc (DocList doc) = f acc doc
+        f (reverse -> acc) (DocBase base) =
+                shellvar :
+                ("    type: " ++ base) :
+                (let xs = catMaybes (mkd <$> acc) in
+                  if null xs then [] else "    documented components:" : xs) ++
+                "" :
+                []
+          where
+            shellvar :: String
+            shellvar = map toUpper . intercalate "_" . map fst $ acc
+
+            mkd :: (String, Maybe String) -> Maybe String
+            mkd (key, Nothing) = Nothing
+            mkd (key, Just descr) = Just $ "        " ++ (toUpper <$> key) ++ ": " ++ descr
+
+        g :: [(String, Maybe String )] -> (String, Maybe String, Doc) -> [String]
+        g acc (key, descr, subdoc) = f ((key, descr) : acc) subdoc
 
 instance HasRenderDoc CommandLine where
-    renderDoc Proxy = _
+    renderDoc Proxy doc = cs . unlines $
+        "" :
+        "Command Line Arguments" :
+        "----------------------" :
+        "" :
+        f doc ++
+        "" :
+        []
+      where
+        f _ = []
