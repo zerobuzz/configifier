@@ -1,30 +1,7 @@
-{-# LANGUAGE BangPatterns                             #-}
 {-# LANGUAGE DataKinds                                #-}
-{-# LANGUAGE DeriveDataTypeable                       #-}
-{-# LANGUAGE DeriveFunctor                            #-}
-{-# LANGUAGE DeriveGeneric                            #-}
-{-# LANGUAGE ExistentialQuantification                #-}
-{-# LANGUAGE FlexibleContexts                         #-}
-{-# LANGUAGE FlexibleInstances                        #-}
-{-# LANGUAGE GADTs                                    #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving               #-}
-{-# LANGUAGE InstanceSigs                             #-}
-{-# LANGUAGE MultiParamTypeClasses                    #-}
-{-# LANGUAGE NoImplicitPrelude                        #-}
-{-# LANGUAGE OverlappingInstances                     #-}
 {-# LANGUAGE OverloadedStrings                        #-}
-{-# LANGUAGE PackageImports                           #-}
-{-# LANGUAGE PatternGuards                            #-}
-{-# LANGUAGE PolyKinds                                #-}
-{-# LANGUAGE QuasiQuotes                              #-}
-{-# LANGUAGE RankNTypes                               #-}
 {-# LANGUAGE ScopedTypeVariables                      #-}
-{-# LANGUAGE StandaloneDeriving                       #-}
-{-# LANGUAGE TemplateHaskell                          #-}
-{-# LANGUAGE TupleSections                            #-}
 {-# LANGUAGE TypeOperators                            #-}
-{-# LANGUAGE TypeSynonymInstances                     #-}
-{-# LANGUAGE ViewPatterns                             #-}
 
 {-# OPTIONS  #-}
 
@@ -39,7 +16,6 @@ import Text.Show.Pretty (ppShow)
 import System.Environment
 
 import qualified Data.ByteString as SBS
-import qualified Data.Text as ST
 import qualified Data.Text.IO as ST
 import qualified Data.Yaml as Yaml
 
@@ -58,7 +34,7 @@ type Cfg' =
   :| "blu" :> SubCfg
 
 type SubCfg =
-     "lii" :> Bool
+     "lii" :>: "lii-desc" :> Bool
 
 
 -- | you can write sample configs in haskell syntax.  (it's not very
@@ -67,8 +43,8 @@ type SubCfg =
 defaultCfg :: Cfg
 defaultCfg =
      Proxy :> 3
-  :| Proxy :>: Proxy :> (Proxy :> False)
-  :| Proxy :>: Proxy :> [Proxy :> "drei" :| Proxy :> Proxy :> True, Proxy :> "vier" :| Proxy :> Proxy :> False]
+  :| Proxy :>: Proxy :> (Proxy :>: Proxy :> False)
+  :| Proxy :>: Proxy :> [Proxy :> "drei" :| Proxy :> Proxy :>: Proxy :> True, Proxy :> "vier" :| Proxy :> Proxy :>: Proxy :> False]
 
 
 main :: IO ()
