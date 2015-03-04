@@ -47,8 +47,8 @@ import Data.Configifier
 -- * the config types
 
 type Cfg =
-     "bla" :>: "description of bla" :> Int
-  :| "blu" :> SubCfg
+     "bla" :> Int
+  :| "blu" :>: "description of blu" :> SubCfg
   :| "uGH" :>: "...  and something about uGH" :> [Cfg']
 
 type Cfg' =
@@ -64,8 +64,8 @@ type SubCfg =
 -- suite on how to access fields in cfg from here on.)
 defaultCfg :: Cfg
 defaultCfg =
-     Proxy :>: Proxy :> 3
-  :| Proxy :> (Proxy :> False)
+     Proxy :> 3
+  :| Proxy :>: Proxy :> (Proxy :> False)
   :| Proxy :>: Proxy :> [Proxy :> "drei" :| Proxy :> Proxy :> True, Proxy :> "vier" :| Proxy :> Proxy :> False]
 
 
@@ -77,7 +77,8 @@ main = do
         , CommandLine <$> getArgs
         ]
 
-    let cfg :: Either Error Cfg = configify sources
-
-    putStrLn $ ppShow (sources, cfg)
-    putStrLn . either show (cs . Yaml.encode) $ cfg
+    case configify sources of
+        Left e -> print e
+        Right (cfg :: Cfg) -> do
+            putStrLn $ ppShow (sources, cfg)
+            putStrLn . cs . Yaml.encode $ cfg

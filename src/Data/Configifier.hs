@@ -296,7 +296,7 @@ merge = foldl (<<>>) Aeson.Null
 mergeAndCatch :: [Either Error Aeson.Value] -> Either Error Aeson.Value
 mergeAndCatch = foldl (\ ev ev' -> (<<>>) <$> c'tcha ev <*> c'tcha ev') (Right Null)
   where
-    -- (this name is a sound from the 'samurai jack' title tune.  it
+    -- (this name is a sound from the samurai jack title tune.  it
     -- has nothing to do with this, but it sounds nice.  go watch
     -- samurai jack!)
     c'tcha = (`catchError` \ _ -> return Null)
