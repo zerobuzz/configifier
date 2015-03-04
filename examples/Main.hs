@@ -50,9 +50,9 @@ defaultCfg =
 main :: IO ()
 main = do
     sources <- sequence
-        [ ConfigFile  <$> SBS.readFile "examples/config.yaml"
-        , ShellEnv    <$> getEnvironment
-        , CommandLine <$> getArgs
+        [ ConfigFileYaml <$> SBS.readFile "examples/config.yaml"
+        , ShellEnv       <$> getEnvironment
+        , CommandLine    <$> getArgs
         ]
 
     -- putStrLn $ ppShow sources

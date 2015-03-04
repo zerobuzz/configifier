@@ -68,7 +68,7 @@ infixr 6 :|
 -- * sources
 
 data Source =
-      ConfigFile SBS
+      ConfigFileYaml SBS
     | ShellEnv [(String, String)]
     | CommandLine [String]
   deriving (Eq, Ord, Show, Typeable)
@@ -96,9 +96,9 @@ configify sources = sequence (_get <$> sources) >>= _parse . merge
     proxy = Proxy :: Proxy cfg
 
     _get :: Source -> Either Error Aeson.Value
-    _get (ConfigFile sbs)   = parseConfigFile proxy sbs
-    _get (ShellEnv env)     = parseShellEnv proxy env
-    _get (CommandLine args) = parseCommandLine proxy args
+    _get (ConfigFileYaml sbs) = parseConfigFile proxy sbs
+    _get (ShellEnv env)       = parseShellEnv proxy env
+    _get (CommandLine args)   = parseCommandLine proxy args
 
     _parse :: Aeson.Value -> Either Error cfg
     _parse = either (Left . InvalidJSON) (Right) . Aeson.parseEither Aeson.parseJSON
