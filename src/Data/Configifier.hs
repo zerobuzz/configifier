@@ -24,6 +24,7 @@ import Control.Monad.Error.Class (catchError)
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
+import Data.Dynamic (cast)
 import Data.Function (on)
 import Data.List (nubBy, intercalate, sort)
 import Data.Maybe (catMaybes)
@@ -302,6 +303,32 @@ slightly better, but there is another problem: if there are two
 found.
 
 doesn't seem to be an option either.
+
+
+** unless...
+
+We can use "Data.Dynamic" to make the instances more generic:
+
+class HasSelector a v where
+    (>.) :: a -> String -> Maybe v
+
+instance (KnownSymbol path, Typeable v, Typeable v')
+        => HasSelector (path :> v') v where
+    (>.) (path :> v') sel = if symbolVal path == sel then cast v' else Nothing
+
+instance (KnownSymbol path, HasSelector o v, Typeable v, Typeable v')
+        => HasSelector (path :> v' :| o) v where
+    (>.) (path :> v' :| o) sel = ((path :> v') >. sel) <|> (o >. sel)
+
+instance (KnownSymbol path, KnownSymbol descr, Typeable v, Typeable v')
+        => HasSelector (path :>: descr :> v') v where
+    (>.) (path :>: _ :> v') = (>.) (path :> v')
+
+instance (KnownSymbol path, KnownSymbol descr, HasSelector o v, Typeable v, Typeable v')
+        => HasSelector (path :>: descr :> v' :| o) v where
+    (>.) (path :>: _ :> v' :| o) = (>.) (path :> v' :| o)
+
+But that requires typeability of type string literals.  failed again.
 
 
 ** ?
