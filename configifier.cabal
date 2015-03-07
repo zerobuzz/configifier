@@ -3,10 +3,13 @@ version:             0.0.2
 synopsis:
     parser for config files, shell variables, command line args.
 description:
-    read your runtime config from config files, shell environment, and
-    command line in a uniform, canonical, and flexible way.  this is
-    an attempt to build something better on the basis of Configurator,
-    cmdargs, optparse-applicative, and similar packages.
+
+    WARNING NOT READY FOR USE YET.  JUST PUTTING IT OUT THERE TO HAVE A DISCUSSION.
+    .
+    Read runtime configuration from files, command line, and shell
+    environment in a uniform, canonical, and flexible way.  Inspired
+    by, among others, Configurator, cmdargs, optparse-applicative.
+
 license:             AGPL-3
 license-file:        LICENSE
 author:              Matthias Fischmann <mf@zerobuzz.net>, Andres Löh <andres@well-typed.com>
