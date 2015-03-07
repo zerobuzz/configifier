@@ -12,7 +12,6 @@ where
 import Control.Applicative
 import Data.Proxy
 import Data.String.Conversions
-import Data.Typeable
 import Debug.Trace
 import Prelude
 import Test.Hspec

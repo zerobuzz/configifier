@@ -27,12 +27,11 @@ import Control.Monad.Error.Class (catchError)
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
-import Data.Dynamic (cast)
 import Data.Function (on)
 import Data.List (nubBy, intercalate, sort)
 import Data.Maybe (catMaybes)
 import Data.String.Conversions (ST, SBS, cs, (<>))
-import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
+import Data.Typeable (Typeable, Proxy(Proxy))
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Safe (readMay)
 
@@ -144,9 +143,7 @@ instance (FromJSON o1, FromJSON o2)
 
 instance (KnownSymbol path, KnownSymbol descr, FromJSON v) => FromJSON (path :> v :>: descr) where
     parseJSON = Aeson.withObject "config object" $ \ m ->
-        let pproxy = Proxy :: Proxy path
-            dproxy = Proxy :: Proxy descr
-            key = cs $ symbolVal pproxy
+        let key = cs $ symbolVal (Proxy :: Proxy path)
         in D . L <$> m Aeson..: key
 
 instance (KnownSymbol path, ToJSON v) => ToJSON (path :> v) where
@@ -447,8 +444,8 @@ instance HasRenderDoc ConfigFile where
         []
       where
         f :: Doc -> [String]
-        f (DocDict cs) = concat $ map g cs
-        f (DocList doc) = indent "- " $ f doc
+        f (DocDict xs)   = concat $ map g xs
+        f (DocList x)    = indent "- " $ f x
         f (DocBase base) = [base]
 
         g :: (String, Maybe String, Doc) -> [String]
@@ -470,7 +467,7 @@ instance HasRenderDoc ShellEnv where
       where
         f :: [(String, Maybe String)] -> Doc -> [String]
         f acc (DocDict xs) = concat $ map (g acc) xs
-        f acc (DocList doc) = f acc doc
+        f acc (DocList x) = f acc x
         f (reverse -> acc) (DocBase base) =
                 shellvar :
                 ("    type: " ++ base) :
@@ -483,14 +480,14 @@ instance HasRenderDoc ShellEnv where
             shellvar = map toUpper . intercalate "_" . map fst $ acc
 
             mkd :: (String, Maybe String) -> Maybe String
-            mkd (key, Nothing) = Nothing
+            mkd (_,   Nothing)    = Nothing
             mkd (key, Just descr) = Just $ "        " ++ (toUpper <$> key) ++ ": " ++ descr
 
         g :: [(String, Maybe String )] -> (String, Maybe String, Doc) -> [String]
         g acc (key, descr, subdoc) = f ((key, descr) : acc) subdoc
 
 instance HasRenderDoc CommandLine where
-    renderDoc Proxy doc = cs . unlines $
+    renderDoc Proxy _ = cs . unlines $
         "" :
         "Command Line Arguments" :
         "----------------------" :
