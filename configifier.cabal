@@ -9,8 +9,8 @@ description:
     cmdargs, optparse-applicative, and similar packages.
 license:             AGPL-3
 license-file:        LICENSE
-author:              Matthias Fischmann
-maintainer:          mf@zerobuzz.net
+author:              Matthias Fischmann <mf@zerobuzz.net>, Andres Löh <andres@well-typed.com>
+maintainer:          Matthias Fischmann <mf@zerobuzz.net>
 copyright:           zerobuzz.net
 category:            Configuration, Data
 build-type:          Simple

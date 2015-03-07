@@ -1,7 +1,9 @@
+{-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE DeriveDataTypeable    #-}
 {-# LANGUAGE EmptyDataDecls        #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE PolyKinds             #-}
@@ -30,7 +32,7 @@ import Data.List (nubBy, intercalate, sort)
 import Data.Maybe (catMaybes)
 import Data.String.Conversions (ST, SBS, cs, (<>))
 import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
-import GHC.TypeLits (KnownSymbol, symbolVal)
+import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Safe (readMay)
 
 -- (FIXME: can i replace aeson entirely with yaml?  right now, the mix
@@ -45,10 +47,10 @@ import qualified Data.Yaml as Yaml
 import qualified Text.Regex.Easy as Regex
 
 
--- * servant-style type combinators
+-- * type combinators
 
 -- | the equivalent of record field selectors.
-data (path :: k) :> v = Proxy path :> v
+data (s :: Symbol) :> (t :: *) = L t
   deriving (Eq, Ord, Show, Typeable)
 infixr 9 :>
 
@@ -56,14 +58,29 @@ infixr 9 :>
 -- still a little awkward.  use tuple of name string and descr string?
 -- or a type class "path" with a type family that translates both @""
 -- :>: ""@ and @""@ to @""@?)
-data (path :: k) :>: descr = Proxy path :>: descr
+data a :>: (s :: Symbol) = D a
   deriving (Eq, Ord, Show, Typeable)
-infixr 9 :>:
+infixr 8 :>:
 
 -- | @cons@ for record fields.
 data a :| b = a :| b
   deriving (Eq, Ord, Show, Typeable)
 infixr 6 :|
+
+
+-- * constructing config values
+
+class Entry a b where
+  entry :: a -> b
+
+instance (a ~ b) => Entry a b where
+  entry = id
+
+instance Entry a b => Entry a (s :> b) where
+  entry = L . entry
+
+instance Entry a b => Entry a (b :>: s) where
+  entry = D . entry
 
 
 -- * sources
@@ -117,28 +134,28 @@ instance (KnownSymbol path, FromJSON v) => FromJSON (path :> v) where
     parseJSON = Aeson.withObject "config object" $ \ m ->
         let proxy = Proxy :: Proxy path
             key = cs $ symbolVal proxy
-        in (proxy :>) <$> m Aeson..: key
+        in L <$> m Aeson..: key
 
 instance (FromJSON o1, FromJSON o2)
         => FromJSON (o1 :| o2) where
     parseJSON value = (:|) <$> (Aeson.parseJSON value :: Aeson.Parser o1)
                            <*> (Aeson.parseJSON value :: Aeson.Parser o2)
 
-instance (KnownSymbol path, KnownSymbol descr, FromJSON v) => FromJSON (path :>: descr :> v) where
+instance (KnownSymbol path, KnownSymbol descr, FromJSON v) => FromJSON (path :> v :>: descr) where
     parseJSON = Aeson.withObject "config object" $ \ m ->
         let pproxy = Proxy :: Proxy path
             dproxy = Proxy :: Proxy descr
             key = cs $ symbolVal pproxy
-        in (pproxy :>:) . (dproxy :>) <$> m Aeson..: key
+        in D . L <$> m Aeson..: key
 
 instance (KnownSymbol path, ToJSON v) => ToJSON (path :> v) where
-    toJSON (path :> v) = object [cs (symbolVal path) Aeson..= toJSON v]
+    toJSON (L v) = object [cs (symbolVal (Proxy :: Proxy path)) Aeson..= toJSON v]
 
 instance (ToJSON o1, ToJSON o2) => ToJSON (o1 :| o2) where
     toJSON (o1 :| o2) = toJSON o1 <<>> toJSON o2
 
-instance (KnownSymbol path, KnownSymbol descr, ToJSON v) => ToJSON (path :>: descr :> v) where
-    toJSON (path :>: _ :> v) = toJSON (path :> v)
+instance (KnownSymbol path, KnownSymbol descr, ToJSON v) => ToJSON (path :> v :>: descr) where
+    toJSON (D l) = toJSON l
 
 
 -- * shell env.
@@ -198,10 +215,10 @@ instance (KnownSymbol path, HasParseShellEnv v, HasParseShellEnv o) => HasParseS
              , parseShellEnv (Proxy :: Proxy (path :> v)) env
              ]
 
-instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v) => HasParseShellEnv (path :>: descr :> v) where
+instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v) => HasParseShellEnv (path :> v :>: descr) where
     parseShellEnv Proxy = parseShellEnv (Proxy :: Proxy (path :> v))
 
-instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v, HasParseShellEnv o) => HasParseShellEnv (path :>: descr :> v :| o) where
+instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v, HasParseShellEnv o) => HasParseShellEnv (path :> v :>: descr :| o) where
     parseShellEnv Proxy = parseShellEnv (Proxy :: Proxy (path :> v :| o))
 
 
@@ -247,8 +264,87 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
     bad -> Left $ "could not parse long-arg with value: " ++ show (s, v, bad)
 
 
--- * access config types
+-- * accessing config values
 
+-- ** data types
+
+-- | Type-level lookup of a path in a configuration type.
+-- A path is represented as a list of symbols.
+type family Val (a :: *) (p :: [Symbol]) :: Maybe * where
+  Val a         '[]       = Just a
+  Val (a :| b)  (p ': ps) = OrElse (Val a (p ': ps)) (Val b (p ': ps))
+  Val (a :>: s) (p ': ps) = Val a (p ': ps)
+  Val (p :> t)  (p ': ps) = Val t ps
+  Val a         p         = Nothing
+
+-- | This is '<|>' on 'Maybe' lifted to the type level.
+type family OrElse (x :: Maybe k) (y :: Maybe k) :: Maybe k where
+  OrElse (Just x) y = Just x
+  OrElse Nothing  y = y
+
+-- | A 'CMaybe' is a static version of 'Maybe', i.e., we know at
+-- compile time whether we have 'Just' or 'Nothing'.
+data CMaybe (a :: Maybe *) where
+  CNothing :: CMaybe Nothing
+  CJust    :: a -> CMaybe (Just a)
+
+-- | This is a version of '<|>' on 'Maybe' for 'CMaybe'.
+combine :: CMaybe a -> CMaybe b -> CMaybe (OrElse a b)
+combine (CJust x) _ = CJust x
+combine CNothing  y = y
+
+
+-- ** exposed interface
+
+-- | This is a wrapper around 'sel' that hides the interal use of
+-- 'CMaybe'.  As we expect, this version will just cause a type error
+-- if it is applied to an illegal path.
+(>.) :: forall a p r . (Sel a p, ValE a p ~ Done r) => a -> Proxy p -> r
+(>.) cfg p = case sel cfg p of
+  CJust x  -> x
+  _        -> error "inaccessible"
+
+-- | FIXME: is it possible to remove 'CMaybe' from the signature and
+-- return @Val a p@ instead?
+class Sel a p where
+  sel :: a -> Proxy p -> CMaybe (Val a p)
+
+
+-- ** implementation of 'Sel'
+
+instance Sel a '[] where
+  sel x _ = CJust x
+
+instance Sel a (p ': ps) => Sel (a :>: s) (p ': ps) where
+  sel (D x) _ = sel x (Proxy :: Proxy (p ': ps))
+
+instance Sel t ps => Sel (p :> t) (p ': ps) where
+  sel (L x) _ = sel x (Proxy :: Proxy ps)
+
+instance (Sel a (p ': ps), Sel b (p ': ps)) => Sel (a :| b) (p ': ps) where
+  sel (x :| y) _ = combine (sel x (Proxy :: Proxy (p ': ps))) (sel y (Proxy :: Proxy (p ': ps)))
+
+-- | We need the 'Val' constraint here because overlapping instances
+-- and closed type families aren't fully compatible.  GHC won't be
+-- able to recognize that we've already excluded the other cases and
+-- not reduce 'Val' automatically.  But the constraint should always
+-- resolve, unless we've made a mistake, and the worst outcome if we
+-- did are extra type errors, not run-time errors.
+instance (Val a ps ~ Nothing) => Sel a ps where
+  sel _ _ = CNothing
+
+
+-- ** better errors
+
+data Exc a b = Fail a | Done b
+
+data LookupFailed a p
+
+type ValE (a :: *) (p :: [Symbol]) = ToExc (LookupFailed a p) (Val a p)
+
+type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
+  ToExc a Nothing  = Fail a
+  ToExc a (Just x) = Done x
 
 
 -- * merge configs
@@ -317,7 +413,7 @@ _makeDocPair pathProxy descrProxy vProxy = DocDict [(symbolVal pathProxy, symbol
 instance (KnownSymbol path, HasToDoc v) => HasToDoc (path :> v) where
     toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Nothing :: Maybe (Proxy path)) (Proxy :: Proxy v)
 
-instance (KnownSymbol path, KnownSymbol descr, HasToDoc v) =>  HasToDoc (path :>: descr :> v) where
+instance (KnownSymbol path, KnownSymbol descr, HasToDoc v) =>  HasToDoc (path :> v :>: descr) where
     toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Just (Proxy :: Proxy descr)) (Proxy :: Proxy v)
 
 instance (HasToDoc o1, HasToDoc o2) => HasToDoc (o1 :| o2) where

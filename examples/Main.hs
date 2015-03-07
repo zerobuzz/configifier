@@ -1,7 +1,15 @@
 {-# LANGUAGE DataKinds                                #-}
+{-# LANGUAGE FlexibleInstances                        #-}
+{-# LANGUAGE GADTs                                    #-}
+{-# LANGUAGE MultiParamTypeClasses                    #-}
+{-# LANGUAGE OverlappingInstances                     #-}
 {-# LANGUAGE OverloadedStrings                        #-}
+{-# LANGUAGE PolyKinds                                #-}
 {-# LANGUAGE ScopedTypeVariables                      #-}
+{-# LANGUAGE StandaloneDeriving                       #-}
+{-# LANGUAGE TypeFamilies                             #-}
 {-# LANGUAGE TypeOperators                            #-}
+{-# LANGUAGE UndecidableInstances                     #-}
 
 {-# OPTIONS  #-}
 
@@ -26,15 +34,15 @@ import Data.Configifier
 
 type Cfg =
      "bla" :> Int
-  :| "blu" :>: "description of blu" :> SubCfg
-  :| "uGH" :>: "...  and something about uGH" :> [Cfg']
+  :| "blu" :> SubCfg :>: "description of blu"
+  :| "uGH" :> [Cfg'] :>: "...  and something about uGH"
 
 type Cfg' =
      "go"  :> ST
   :| "blu" :> SubCfg
 
 type SubCfg =
-     "lii" :>: "lii-desc" :> Bool
+     "lii" :> Bool :>: "lii-desc"
 
 
 -- | you can write sample configs in haskell syntax.  (it's not very
@@ -42,9 +50,11 @@ type SubCfg =
 -- suite on how to access fields in cfg from here on.)
 defaultCfg :: Cfg
 defaultCfg =
-     Proxy :> 3
-  :| Proxy :>: Proxy :> (Proxy :>: Proxy :> False)
-  :| Proxy :>: Proxy :> [Proxy :> "drei" :| Proxy :> Proxy :>: Proxy :> True, Proxy :> "vier" :| Proxy :> Proxy :>: Proxy :> False]
+     entry 3
+  :| entry False
+  :| entry [ entry "drei" :| entry True
+           , entry "vier" :| entry False
+           ]
 
 
 main :: IO ()
@@ -64,3 +74,8 @@ main = do
         Right (cfg :: Cfg) -> do
             putStrLn $ ppShow cfg
             putStrLn . cs . Yaml.encode $ cfg
+
+            putStrLn "accessing config values:"
+            print $ (cfg >. (Proxy :: Proxy '["bla"]))
+            print $ (cfg >. (Proxy :: Proxy '["blu", "lii"]))
+            print $ (>. (Proxy :: Proxy '["go"])) <$> (cfg >. (Proxy :: Proxy '["uGH"]))

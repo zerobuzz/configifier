@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds                                #-}
+{-# LANGUAGE IncoherentInstances                      #-}
 {-# LANGUAGE OverlappingInstances                     #-}
 {-# LANGUAGE OverloadedStrings                        #-}
 {-# LANGUAGE TypeOperators                            #-}
@@ -11,6 +12,7 @@ where
 import Control.Applicative
 import Data.Proxy
 import Data.String.Conversions
+import Data.Typeable
 import Debug.Trace
 import Prelude
 import Test.Hspec
@@ -37,13 +39,11 @@ misc = describe "misc" $ do
     describe "<<>>" $ do
         it "does not crash" . property $ \ a b -> (length . show $ a <<>> b) > 0
 
-{-
     describe "(>.)" $ do
         it "works (unit)" $ do
-            (cfg >. (Proxy :: Proxy "bla") :: Int) `shouldBe` 3
-            ((cfg >. (Proxy :: Proxy "blu") :: SubCfg) >. (Proxy :: Proxy "lii") :: Bool) `shouldBe` False
-            ((>. (Proxy :: Proxy "go")) <$> (cfg >. (Proxy :: Proxy "uGH") :: [Cfg']) :: [ST]) `shouldBe` ["drei","vier"]
--}
+            (cfg >. (Proxy :: Proxy '["bla"])) `shouldBe` 3
+            (cfg >. (Proxy :: Proxy '["blu", "lii"])) `shouldBe` False
+            (>. (Proxy :: Proxy '["go"])) <$> (cfg >. (Proxy :: Proxy '["uGH"])) `shouldBe` ["drei","vier"]
 
     describe "FromJSON, ToJSON" $ do
         it "is mutually inverse" $ do
@@ -65,9 +65,9 @@ simpleJSONTest noisy x = _trace $ x' `shouldBe` Aeson.Success x
         else id
 
 type Cfg =
-     "bla" :>: "description of bla" :> Int
+     "bla" :> Int :>: "description of bla"
   :| "blu" :> SubCfg
-  :| "uGH" :>: "...  and something about uGH" :> [Cfg']
+  :| "uGH" :> [Cfg'] :>: "...  and something about uGH"
 
 type Cfg' =
      "go"  :> ST
@@ -78,15 +78,15 @@ type SubCfg =
 
 cfg :: Cfg
 cfg =
-     Proxy :>: Proxy :> 3
-  :| Proxy :> subCfg
-  :| Proxy :>: Proxy :> cfg's
+     entry 3
+  :| entry False  -- Curiously, it's not ok to put 'subCfg' here.
+  :| entry cfg's
 
 cfg's :: [Cfg']
 cfg's =
-    [ Proxy :> "drei" :| Proxy :> Proxy :> True
-    , Proxy :> "vier" :| Proxy :> Proxy :> False
+    [ entry "drei" :| entry True
+    , entry "vier" :| entry False
     ]
 
 subCfg :: SubCfg
-subCfg = Proxy :> False
+subCfg = entry False
