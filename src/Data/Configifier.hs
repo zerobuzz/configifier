@@ -1,3 +1,4 @@
+{-# LANGUAGE ConstraintKinds       #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE DeriveDataTypeable    #-}
 {-# LANGUAGE EmptyDataDecls        #-}
@@ -24,6 +25,7 @@ where
 import Control.Applicative ((<$>), (<*>), (<|>))
 import Control.Exception (Exception, assert)
 import Control.Monad.Error.Class (catchError)
+import Control.Monad.Identity
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
@@ -32,7 +34,7 @@ import Data.Function (on)
 import Data.List (nubBy, intercalate, sort)
 import Data.Maybe (catMaybes)
 import Data.String.Conversions (ST, SBS, cs, (<>))
-import Data.Typeable (Typeable, Proxy(Proxy))
+import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Safe (readMay)
 
@@ -50,38 +52,77 @@ import qualified Text.Regex.Easy as Regex
 
 -- * type combinators
 
--- | the equivalent of record field selectors.
-data (s :: Symbol) :> (t :: *) = L t
-  deriving (Eq, Ord, Show, Typeable)
-infixr 9 :>
-
--- | descriptive strings for documentation.  (the way we use this is
--- still a little awkward.  use tuple of name string and descr string?
--- or a type class "path" with a type family that translates both @""
--- :>: ""@ and @""@ to @""@?)
-data a :>: (s :: Symbol) = D a
-  deriving (Eq, Ord, Show, Typeable)
-infixr 8 :>:
-
--- | @cons@ for record fields.
+-- | Construction of config records (@cons@ for record fields).
 data a :| b = a :| b
   deriving (Eq, Ord, Show, Typeable)
 infixr 6 :|
 
+-- | Construction of config record fields.
+data (s :: Symbol) :> (t :: *)
+infixr 9 :>
 
--- * constructing config values
+-- | Add descriptive text to record field for documentation.
+data a :>: (s :: Symbol)
+infixr 8 :>:
 
-class Entry a b where
-  entry :: a -> b
 
-instance (a ~ b) => Entry a b where
-  entry = id
+-- * ...
 
-instance Entry a b => Entry a (s :> b) where
-  entry = L . entry
+data ConfigCode a =
+      Choice (ConfigCode a) (ConfigCode a)
+    | LabelD Symbol (ConfigCode a) Symbol
+    | Label  Symbol (ConfigCode a)
+    | List   (ConfigCode a)
+    | Type   a
 
-instance Entry a b => Entry a (b :>: s) where
-  entry = D . entry
+infixr 6 `Choice`
+
+-- | Map user-provided config type to 'ConfigCode' types.
+type family ToConfigCode (a :: *) :: ConfigCode * where
+    ToConfigCode (a :| b)       = Choice (ToConfigCode a) (ToConfigCode b)
+    ToConfigCode (s :> t :>: s) = LabelD s (ToConfigCode t) s
+    ToConfigCode (s :> t)       = Label s (ToConfigCode t)
+    ToConfigCode [a]            = List (ToConfigCode a)
+    ToConfigCode a              = Type a
+
+-- | ...
+type family ToConfig (c :: ConfigCode *) (f :: * -> *) :: * where
+    ToConfig (Choice a b)   f = ToConfig a f :| ToConfig b f
+    ToConfig (LabelD s t d) f = f (ToConfig t f)
+    ToConfig (Label s t)    f = f (ToConfig t f)
+    ToConfig (List c)       f = [ToConfig c f]
+    ToConfig (Type a)       f = a
+
+
+
+class Merge c where
+    merge  :: ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
+    freeze :: ToConfig c Maybe -> ToConfig c Identity
+
+instance (Merge a, Merge b) => Merge (Choice a b) where
+    merge (x :| y) (x' :| y') = merge x x' :| merge y y'
+    freeze (x :| y) = freeze x :| freeze y
+
+instance (Merge t) => Merge (LabelD s t d) where
+    merge x y = merge x <|> merge y
+    freeze (Just x) = freeze x
+    freeze Nothing = error "could not freeze partial config."
+
+{-
+instance (Merge t) => Merge (Label s t) where
+    merge = _
+    freeze = _
+
+instance (Merge c) => Merge (List c) where
+    merge = _
+    freeze = _
+
+instance Merge (Type a) where
+    merge = _
+    freeze = _
+-}
+
+
 
 
 -- * sources
@@ -97,33 +138,36 @@ data ShellEnv
 data CommandLine
 
 data Error =
-      InvalidJSON String
-    | ShellEnvNoParse (String, String)
+      InvalidYaml String
+    | ShellEnvNoParse (String, String, String)
     | ShellEnvSegmentNotFound String
     | CommandLinePrimitiveParseError String
-    | CommandLinePrimitiveOther Error
+    | CommandLinePrimitiveOtherError Error
+    | ReParseError Error
   deriving (Eq, Ord, Show, Typeable)
 
 instance Exception Error
 
+{-
+
 configify :: forall cfg .
-      ( FromJSON cfg
-      , HasParseConfigFile cfg
+      ( HasParseConfigFile cfg
       , HasParseShellEnv cfg
       , HasParseCommandLine cfg
       ) => [Source] -> Either Error cfg
-configify sources = sequence (_get <$> sources) >>= _parse . merge
+configify sources = sequence (get <$> sources) >>= reparse . merge
   where
     proxy = Proxy :: Proxy cfg
 
-    _get :: Source -> Either Error Aeson.Value
-    _get (ConfigFileYaml sbs) = parseConfigFile proxy sbs
-    _get (ShellEnv env)       = parseShellEnv proxy env
-    _get (CommandLine args)   = parseCommandLine proxy args
+    get :: Source -> Either Error Aeson.Value
+    get (ConfigFileYaml sbs) = parseConfigFile proxy sbs
+    get (ShellEnv env)       = parseShellEnv proxy env
+    get (CommandLine args)   = parseCommandLine proxy args
 
-    _parse :: Aeson.Value -> Either Error cfg
-    _parse = either (Left . InvalidJSON) (Right) . Aeson.parseEither Aeson.parseJSON
+-}
 
+
+{-
 
 -- * json / yaml
 
@@ -158,6 +202,18 @@ instance (ToJSON o1, ToJSON o2) => ToJSON (o1 :| o2) where
 instance (KnownSymbol path, KnownSymbol descr, ToJSON v) => ToJSON (path :> v :>: descr) where
     toJSON (D l) = toJSON l
 
+-- | Basic parts of the config structure parse as yaml in all sources:
+-- In order to pass a value of type '[(Int, Int)]' via shell env with
+-- @CFG_FIELD="[(3, 4), (1, 2)]"@, wrap the 'field' part of the config
+-- structure in 'Basic':
+--
+-- > type Cfg = "field" :> Basic [(Int, Int)]
+newtype Basic a = Basic a
+  deriving (Eq, Ord, Show, Read, Typeable)
+
+instance (ToJSON v) => HasParseConfigFile (Basic v) where
+    parseConfigFile Proxy sbs = parseConfigFile (Proxy :: Proxy v) sbs
+
 
 -- * shell env.
 
@@ -166,40 +222,18 @@ type Env = [(String, String)]
 class HasParseShellEnv a where
     parseShellEnv :: Proxy a -> Env -> Either Error Aeson.Value
 
-class HasParseShellEnv' a where
-    parseShellEnv' :: Proxy a -> Env -> Either Error Aeson.Pair
-
-instance HasParseShellEnv Int where
-    parseShellEnv Proxy [("", s)] = Aeson.Number <$> _catch (readMay s)
-      where
-        _catch = maybe (Left $ ShellEnvNoParse ("Int", s)) Right
-
-instance HasParseShellEnv Bool where
-    parseShellEnv Proxy [("", s)] = Aeson.Bool <$> _catch (readMay s)
-      where
-        _catch = maybe (Left $ ShellEnvNoParse ("Bool", s)) Right
-
-instance HasParseShellEnv ST where
-    parseShellEnv Proxy [("", s)] = Right . Aeson.String $ cs s
-
--- | since shell env is not ideally suitable for providing
--- arbitrary-length lists of sub-configs, we cheat: if a value is fed
--- into a place where a list of values is expected, a singleton list
--- is constructed implicitly.
-instance HasParseShellEnv a => HasParseShellEnv [a] where
-    parseShellEnv Proxy = fmap (Aeson.Array . Vector.fromList . (:[])) . parseShellEnv (Proxy :: Proxy a)
-
--- | the sub-object structure of the config file is represented by '_'
--- in the shell variable names.  (i think it's still ok to have '_' in
--- your config variable names instead of caml case; this parser first
--- chops off matching names, then worries about trailing '_'.)
+-- | The sub-object structure of the config file is represented by '_'
+-- in the shell variable names.  (It is still ok to have '_' in your
+-- config path names instead of caml case; this parser chops off
+-- complete matching names, whether they contain '_' or not, and only
+-- then worries about trailing '_'.)
 instance (KnownSymbol path, HasParseShellEnv v) => HasParseShellEnv (path :> v) where
     parseShellEnv Proxy env = do
         let key = symbolVal (Proxy :: Proxy path)
-            env' = catMaybes $ _crop <$> env
+            env' = catMaybes $ crop <$> env
 
-            _crop :: (String, String) -> Maybe (String, String)
-            _crop (k, v) = case splitAt (length key) k of
+            crop :: (String, String) -> Maybe (String, String)
+            crop (k, v) = case splitAt (length key) k of
                 (key', s@"")        | mk key == mk key' -> Just (s, v)
                 (key', '_':s@(_:_)) | mk key == mk key' -> Just (s, v)
                 _                                       -> Nothing
@@ -210,17 +244,59 @@ instance (KnownSymbol path, HasParseShellEnv v) => HasParseShellEnv (path :> v) 
                 val :: Aeson.Value <- parseShellEnv (Proxy :: Proxy v) env'
                 return $ object [cs key Aeson..= val]
 
-instance (KnownSymbol path, HasParseShellEnv v, HasParseShellEnv o) => HasParseShellEnv (path :> v :| o) where
-    parseShellEnv Proxy env = mergeAndCatch
-             [ parseShellEnv (Proxy :: Proxy o)           env
-             , parseShellEnv (Proxy :: Proxy (path :> v)) env
+instance (KnownSymbol path, HasParseShellEnv v, HasParseShellEnv o)
+        => HasParseShellEnv (path :> v :| o) where
+    parseShellEnv Proxy env = merge <$> sequence
+             [ parseShellEnv (Proxy :: Proxy (path :> v)) env
+             , parseShellEnv (Proxy :: Proxy o)           env
              ]
 
-instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v) => HasParseShellEnv (path :> v :>: descr) where
+instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v)
+        => HasParseShellEnv (path :> v :>: descr) where
     parseShellEnv Proxy = parseShellEnv (Proxy :: Proxy (path :> v))
 
-instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v, HasParseShellEnv o) => HasParseShellEnv (path :> v :>: descr :| o) where
+instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v, HasParseShellEnv o)
+        => HasParseShellEnv (path :> v :>: descr :| o) where
     parseShellEnv Proxy = parseShellEnv (Proxy :: Proxy (path :> v :| o))
+
+instance (Typeable a, ToJSON a, FromJSON a) => HasParseShellEnv (Basic a) where
+    parseShellEnv Proxy = parseYamlToShellEnv (Proxy :: Proxy a)
+
+instance HasParseShellEnv Int where
+    parseShellEnv = parseYamlToShellEnv
+
+instance HasParseShellEnv Bool where
+    parseShellEnv = parseYamlToShellEnv
+
+-- | (String values should not need to be quoted, so they are not
+-- handled by 'Yaml.decode'.)
+instance HasParseShellEnv ST where
+    parseShellEnv Proxy [("", s)] = Right . Aeson.String $ cs s
+
+-- | Pairs are treated as 'Basic' implicitly (without being
+-- newtype-wrapped).
+instance (Typeable a, ToJSON a, FromJSON a, Typeable b, ToJSON b, FromJSON b)
+        => HasParseShellEnv (a, b) where
+    parseShellEnv = parseYamlToShellEnv
+
+-- | 'Maybe' values translate to either 'Aeson.Null' or the plain
+-- value (no 'Just' constructor).
+instance (Typeable a, FromJSON a, ToJSON a, HasParseShellEnv a)
+        => HasParseShellEnv (Maybe a) where
+    parseShellEnv = parseYamlToShellEnv
+
+-- | Lists are treated as 'Basic' implicitly (without being
+-- newtype-wrapped).
+instance HasParseShellEnv a
+        => HasParseShellEnv [a] where
+    parseShellEnv Proxy = fmap (Aeson.Array . Vector.singleton) . parseShellEnv (Proxy :: Proxy a)
+
+
+parseYamlToShellEnv :: forall a . (Typeable a, FromJSON a, ToJSON a)
+        => Proxy a -> Env -> Either Error Aeson.Value
+parseYamlToShellEnv Proxy [("", s)] = case Yaml.decodeEither $ cs s :: Either String a of
+    Right a -> Right $ Aeson.toJSON a
+    Left e  -> Left $ ShellEnvNoParse (show $ typeOf (undefined :: a), s, e)
 
 
 -- * cli
@@ -345,8 +421,16 @@ type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
   ToExc a Nothing  = Fail a
   ToExc a (Just x) = Done x
 
+-}
+
+
+
+
+
 
 -- * merge configs
+
+{-
 
 -- | Merge two json trees such that the latter overwrites nodes in the
 -- former.  'Null' is considered as non-existing.  Otherwise, right
@@ -379,8 +463,13 @@ mergeAndCatch = foldl (\ ev ev' -> (<<>>) <$> c'tcha ev <*> c'tcha ev') (Right N
     -- samurai jack!)
     c'tcha = (`catchError` \ _ -> return Null)
 
+-}
+
+
 
 -- * docs.
+
+{-
 
 docs :: ( HasToDoc a
         , HasRenderDoc ConfigFile
@@ -497,3 +586,5 @@ instance HasRenderDoc CommandLine where
         "variable, you can also set with a long arg.)" :
         "" :
         []
+
+-}
