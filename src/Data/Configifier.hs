@@ -70,7 +70,7 @@ infixr 8 :>:
 
 data ConfigCode a =
       Choice (ConfigCode a) (ConfigCode a)
-    | LabelD Symbol (ConfigCode a) Symbol
+    | Descr  (ConfigCode a) Symbol
     | Label  Symbol (ConfigCode a)
     | List   (ConfigCode a)
     | Type   a
@@ -78,51 +78,20 @@ data ConfigCode a =
 infixr 6 `Choice`
 
 -- | Map user-provided config type to 'ConfigCode' types.
-type family ToConfigCode (a :: *) :: ConfigCode * where
+type family ToConfigCode (x :: *) :: ConfigCode * where
     ToConfigCode (a :| b)       = Choice (ToConfigCode a) (ToConfigCode b)
-    ToConfigCode (s :> t :>: s) = LabelD s (ToConfigCode t) s
+    ToConfigCode (s :> t :>: s) = Descr (ToConfigCode (s :> t)) s
     ToConfigCode (s :> t)       = Label s (ToConfigCode t)
     ToConfigCode [a]            = List (ToConfigCode a)
     ToConfigCode a              = Type a
 
--- | ...
+-- | Map 'ConfgCode' types to the types of config values.
 type family ToConfig (c :: ConfigCode *) (f :: * -> *) :: * where
-    ToConfig (Choice a b)   f = ToConfig a f :| ToConfig b f
-    ToConfig (LabelD s t d) f = f (ToConfig t f)
-    ToConfig (Label s t)    f = f (ToConfig t f)
-    ToConfig (List c)       f = [ToConfig c f]
-    ToConfig (Type a)       f = a
-
-
-
-class Merge c where
-    merge  :: ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
-    freeze :: ToConfig c Maybe -> ToConfig c Identity
-
-instance (Merge a, Merge b) => Merge (Choice a b) where
-    merge (x :| y) (x' :| y') = merge x x' :| merge y y'
-    freeze (x :| y) = freeze x :| freeze y
-
-instance (Merge t) => Merge (LabelD s t d) where
-    merge x y = merge x <|> merge y
-    freeze (Just x) = freeze x
-    freeze Nothing = error "could not freeze partial config."
-
-{-
-instance (Merge t) => Merge (Label s t) where
-    merge = _
-    freeze = _
-
-instance (Merge c) => Merge (List c) where
-    merge = _
-    freeze = _
-
-instance Merge (Type a) where
-    merge = _
-    freeze = _
--}
-
-
+    ToConfig (Choice a b) f = ToConfig a f :| ToConfig b f
+    ToConfig (Descr a d)  f = ToConfig a f
+    ToConfig (Label s t)  f = f (ToConfig t f)
+    ToConfig (List c)     f = [ToConfig c f]
+    ToConfig (Type a)     f = a
 
 
 -- * sources
@@ -143,28 +112,34 @@ data Error =
     | ShellEnvSegmentNotFound String
     | CommandLinePrimitiveParseError String
     | CommandLinePrimitiveOtherError Error
-    | ReParseError Error
+    | FreezeIncomplete
   deriving (Eq, Ord, Show, Typeable)
 
 instance Exception Error
 
-{-
-
-configify :: forall cfg .
-      ( HasParseConfigFile cfg
-      , HasParseShellEnv cfg
-      , HasParseCommandLine cfg
-      ) => [Source] -> Either Error cfg
-configify sources = sequence (get <$> sources) >>= reparse . merge
+configify :: forall cfg val mval .
+      ( val ~ ToConfig cfg Identity
+      , mval ~ ToConfig cfg Maybe
+      , Merge cfg
+      , HasParseConfigFile cfg
+--      , HasParseShellEnv cfg
+--      , HasParseCommandLine cfg
+      ) => [Source] -> Either Error val
+configify [] = error "configify: no sources!"
+configify sources = sequence (get <$> sources) >>= merge proxy
   where
     proxy = Proxy :: Proxy cfg
 
-    get :: Source -> Either Error Aeson.Value
+    get :: Source -> Either Error mval
     get (ConfigFileYaml sbs) = parseConfigFile proxy sbs
-    get (ShellEnv env)       = parseShellEnv proxy env
-    get (CommandLine args)   = parseCommandLine proxy args
+--    get (ShellEnv env)       = parseShellEnv proxy env
+--    get (CommandLine args)   = parseCommandLine proxy args
 
--}
+
+
+class HasParseConfigFile cfg where
+    parseConfigFile :: Proxy cfg -> SBS -> Either Error (ToConfig cfg Maybe)
+
 
 
 {-
@@ -430,41 +405,32 @@ type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
 
 -- * merge configs
 
-{-
+merge :: Merge c => Proxy c -> [ToConfig c Maybe] -> Either Error (ToConfig c Identity)
+merge Proxy [] = error "merge: empty list."
+merge proxy (x:xs) = _freeze proxy $ foldl (_merge proxy) x xs
 
--- | Merge two json trees such that the latter overwrites nodes in the
--- former.  'Null' is considered as non-existing.  Otherwise, right
--- values overwrite left values.
-(<<>>) :: Aeson.Value -> Aeson.Value -> Aeson.Value
-(<<>>) (Object m) (Object m') = object $ f <$> ks
-  where
-    ks :: [ST]
-    ks = Set.toList . Set.fromList $ HashMap.keys m ++ HashMap.keys m'
 
-    f :: ST -> Aeson.Pair
-    f k = k Aeson..=
-        case (k `HashMap.lookup` m, k `HashMap.lookup` m') of
-            (Just v,  Just v') -> v <<>> v'
-            (Nothing, Just v') -> v'
-            (Just v,  Nothing) -> v
-            (Nothing, Nothing) -> assert False $ error "internal error in (<<>>)"
+-- | Merge two partial configs.
+class Merge c where
+    _merge  :: Proxy c -> ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
+    _freeze :: Proxy c -> ToConfig c Maybe -> Either Error (ToConfig c Identity)
 
-(<<>>) v Null = v
-(<<>>) _ v'   = v'
+instance (Merge a, Merge b) => Merge (Choice a b) where
+    _merge Proxy (x :| y) (x' :| y') = _merge (Proxy :: Proxy a) x x' :| _merge (Proxy :: Proxy b) y y'
+    _freeze Proxy (x :| y) = do
+        x' <- _freeze (Proxy :: Proxy a) x
+        y' <- _freeze (Proxy :: Proxy b) y
+        Right $ x' :| y'
 
-merge :: [Aeson.Value] -> Aeson.Value
-merge = foldl (<<>>) Aeson.Null
+instance (Merge t) => Merge (Label s t) where
+    _merge Proxy (Just x) (Just y) = Just $ _merge (Proxy :: Proxy t) x y
+    _merge Proxy mx       my       = my <|> mx
+    _freeze Proxy (Just x) = Identity <$> _freeze (Proxy :: Proxy t) x
+    _freeze Proxy Nothing = Left FreezeIncomplete
 
-mergeAndCatch :: [Either Error Aeson.Value] -> Either Error Aeson.Value
-mergeAndCatch = foldl (\ ev ev' -> (<<>>) <$> c'tcha ev <*> c'tcha ev') (Right Null)
-  where
-    -- (this name is a sound from the samurai jack title tune.  it
-    -- has nothing to do with this, but it sounds nice.  go watch
-    -- samurai jack!)
-    c'tcha = (`catchError` \ _ -> return Null)
-
--}
-
+instance (Merge c) => Merge (List c) where
+    _merge Proxy xs ys = xs ++ ys  -- FIXME: how to delete / overwrite previously configured list values?
+    _freeze Proxy xs = sequence $ _freeze (Proxy :: Proxy c) <$> xs
 
 
 -- * docs.
