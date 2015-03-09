@@ -124,12 +124,10 @@ configify :: forall cfg val mval .
       , HasParseConfigFile cfg
 --      , HasParseShellEnv cfg
 --      , HasParseCommandLine cfg
-      ) => [Source] -> Either Error val
-configify [] = error "configify: no sources!"
-configify sources = sequence (get <$> sources) >>= merge proxy
+      ) => Proxy cfg -> [Source] -> Either Error val
+configify proxy [] = error "configify: no sources!"
+configify proxy sources = sequence (get <$> sources) >>= merge proxy
   where
-    proxy = Proxy :: Proxy cfg
-
     get :: Source -> Either Error mval
     get (ConfigFileYaml sbs) = parseConfigFile proxy sbs
 --    get (ShellEnv env)       = parseShellEnv proxy env
