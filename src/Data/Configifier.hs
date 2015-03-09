@@ -27,6 +27,7 @@ import Control.Monad.Error.Class (catchError)
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
+import Data.Either.Combinators (mapLeft)
 import Data.Function (on)
 import Data.List (nubBy, intercalate, sort)
 import Data.Maybe (catMaybes)
@@ -130,7 +131,7 @@ class HasParseConfigFile cfg where
     parseConfigFile :: Proxy cfg -> SBS -> Either Error Aeson.Value
 
 instance HasParseConfigFile cfg where
-    parseConfigFile Proxy sbs = either (Left . InvalidJSON) (Right) (Yaml.decodeEither sbs)
+    parseConfigFile Proxy sbs = mapLeft InvalidYaml $ Yaml.decodeEither sbs
 
 instance (KnownSymbol path, FromJSON v) => FromJSON (path :> v) where
     parseJSON = Aeson.withObject "config object" $ \ m ->
@@ -240,12 +241,10 @@ instance (HasParseShellEnv cfg) => HasParseCommandLine cfg where
 -- in the future.
 primitiveParseCommandLine :: (HasParseShellEnv cfg) => Proxy cfg -> [String] -> Either Error Aeson.Value
 primitiveParseCommandLine proxy args =
-      convertParseError (lastWins <$> parseArgs args)
-          >>= convertShellEnvError . parseShellEnv proxy
+      mapLeft CommandLinePrimitiveParseError (lastWins <$> parseArgs args)
+          >>= mapLeft CommandLinePrimitiveOtherError . parseShellEnv proxy
   where
-    convertParseError    = either (Left . CommandLinePrimitiveParseError) Right
-    convertShellEnvError = either (Left . CommandLinePrimitiveOther) Right
-    lastWins             = reverse . nubBy ((==) `on` fst) . reverse
+    lastWins = reverse . nubBy ((==) `on` fst) . reverse
 
 parseArgs :: Args -> Either String Env
 parseArgs [] = Right []
