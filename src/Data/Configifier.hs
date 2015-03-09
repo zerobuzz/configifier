@@ -22,7 +22,7 @@ module Data.Configifier
 where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
-import Control.Exception (assert)
+import Control.Exception (Exception, assert)
 import Control.Monad.Error.Class (catchError)
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
 import Data.CaseInsensitive (mk)
@@ -102,6 +102,8 @@ data Error =
     | CommandLinePrimitiveParseError String
     | CommandLinePrimitiveOther Error
   deriving (Eq, Ord, Show, Typeable)
+
+instance Exception Error
 
 configify :: forall cfg .
       ( FromJSON cfg
