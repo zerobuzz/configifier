@@ -1,20 +1,24 @@
+{-# LANGUAGE ConstraintKinds       #-}
+{-# LANGUAGE DeriveFunctor         #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE DeriveDataTypeable    #-}
 {-# LANGUAGE EmptyDataDecls        #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
+{-# LANGUAGE InstanceSigs          #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverlappingInstances  #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE PolyKinds             #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
 {-# LANGUAGE ViewPatterns          #-}
 
-{-# LANGUAGE UndecidableInstances  #-}  -- should only be required to run 'HasParseCommandLine'; remove later!
+{-# LANGUAGE UndecidableInstances  #-}  -- is there a way to remove this?
 
 {-# OPTIONS  #-}
 
@@ -24,17 +28,19 @@ where
 import Control.Applicative ((<$>), (<*>), (<|>))
 import Control.Exception (Exception, assert)
 import Control.Monad.Error.Class (catchError)
-import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
+import Control.Monad.Identity
+import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON, (.=))
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
 import Data.Function (on)
-import Data.List (nubBy, intercalate, sort)
+import Data.List (nubBy, intercalate)
 import Data.Maybe (catMaybes)
 import Data.String.Conversions (ST, SBS, cs, (<>))
-import Data.Typeable (Typeable, Proxy(Proxy))
+import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Safe (readMay)
+import Text.Show.Pretty (ppShow)
 
 -- (FIXME: can i replace aeson entirely with yaml?  right now, the mix
 -- of use of both is rather chaotic.)
@@ -48,40 +54,67 @@ import qualified Data.Yaml as Yaml
 import qualified Text.Regex.Easy as Regex
 
 
--- * type combinators
+-- * config types
 
--- | the equivalent of record field selectors.
-data (s :: Symbol) :> (t :: *) = L t
-  deriving (Eq, Ord, Show, Typeable)
-infixr 9 :>
-
--- | descriptive strings for documentation.  (the way we use this is
--- still a little awkward.  use tuple of name string and descr string?
--- or a type class "path" with a type family that translates both @""
--- :>: ""@ and @""@ to @""@?)
-data a :>: (s :: Symbol) = D a
-  deriving (Eq, Ord, Show, Typeable)
-infixr 8 :>:
-
--- | @cons@ for record fields.
+-- | Construction of config records (@cons@ for record fields).
 data a :| b = a :| b
   deriving (Eq, Ord, Show, Typeable)
 infixr 6 :|
 
+-- | Construction of config record fields.
+data (s :: Symbol) :> (t :: *)
+  deriving (Typeable)
+infixr 9 :>
 
--- * constructing config values
+-- | Add descriptive text to record field for documentation.
+data a :>: (s :: Symbol)
+  deriving (Typeable)
+infixr 8 :>:
 
-class Entry a b where
-  entry :: a -> b
 
-instance (a ~ b) => Entry a b where
-  entry = id
+data ConfigCode k =
+      Choice (ConfigCode k) (ConfigCode k)
+    | Label  Symbol (ConfigCode k)
+    | Descr  (ConfigCode k) Symbol
+    | List   (ConfigCode k)
+    | Option (ConfigCode k)
+    | Type   k
 
-instance Entry a b => Entry a (s :> b) where
-  entry = L . entry
+infixr 6 `Choice`
 
-instance Entry a b => Entry a (b :>: s) where
-  entry = D . entry
+
+-- | Map user-provided config type to 'ConfigCode' types.
+type family ToConfigCode (a :: *) :: ConfigCode * where
+    ToConfigCode (a :| b)  = Choice (ToConfigCode a) (ToConfigCode b)
+    ToConfigCode (s :> a)  = Label s (ToConfigCode a)
+    ToConfigCode (a :>: s) = Descr (ToConfigCode a) s
+    ToConfigCode [a]       = List (ToConfigCode a)
+    ToConfigCode (Maybe a) = Option (ToConfigCode a)
+    ToConfigCode a         = Type a
+
+-- | Filter 'Descr' constructors from 'ConfigCode'.
+type family NoDesc (a :: ConfigCode *) :: ConfigCode * where
+    NoDesc (Choice a b) = Choice (NoDesc a) (NoDesc b)
+    NoDesc (Label s a)  = Label s (NoDesc a)
+    NoDesc (Descr a s)  = NoDesc a
+    NoDesc (List a)     = List (NoDesc a)
+    NoDesc (Option a)   = Option (NoDesc a)
+    NoDesc (Type a)     = Type a
+
+-- | Map 'ConfgCode' types to the types of config values.
+type family ToConfig (a :: ConfigCode *) (f :: * -> *) :: * where
+    ToConfig (Choice a b) f = ToConfig a f :| ToConfig b f
+    ToConfig (Label s a)  f = f (ToConfig a f)
+    ToConfig (List a)     f = [ToConfig a f]
+    ToConfig (Option a)   f = Maybe (ToConfig a f)
+    ToConfig (Type a)     f = a
+
+type family RunIdentity (a :: *) :: * where
+    RunIdentity (Identity x) = x
+    RunIdentity (a :| b)     = RunIdentity a :| RunIdentity b
+    RunIdentity [a]          = [RunIdentity a]
+    RunIdentity (Maybe a)    = Maybe (RunIdentity a)
+    RunIdentity x            = x
 
 
 -- * sources
@@ -96,134 +129,225 @@ data ConfigFile
 data ShellEnv
 data CommandLine
 
-data Error =
-      InvalidJSON String
-    | ShellEnvNoParse (String, String)
+
+-- * tagged values
+
+data Tagged cfg t = Tagged t
+  deriving (Eq, Ord, Show, Typeable)
+
+fromTagged :: Tagged cfg t -> t
+fromTagged (Tagged t) = t
+
+
+-- * results and errors
+
+type Result cfg = Either Error (Tagged cfg (ToConfig cfg Identity))
+
+data Error =  -- FIXME: are these all in use?
+      InvalidYaml String
+    | ShellEnvNoParse (String, String, String)
     | ShellEnvSegmentNotFound String
     | CommandLinePrimitiveParseError String
-    | CommandLinePrimitiveOther Error
+    | CommandLinePrimitiveOtherError Error
+    | FreezeIncomplete [String]
   deriving (Eq, Ord, Show, Typeable)
 
 instance Exception Error
 
-configify :: forall cfg .
-      ( FromJSON cfg
-      , HasParseConfigFile cfg
+
+-- * the main function
+
+configify :: forall cfg mval .
+      ( mval ~ Tagged cfg (ToConfig cfg Maybe)
+      , Merge cfg
+      , FromJSON mval
       , HasParseShellEnv cfg
-      , HasParseCommandLine cfg
-      ) => [Source] -> Either Error cfg
-configify sources = sequence (_get <$> sources) >>= _parse . merge
+--      , HasParseCommandLine cfg
+      ) => [Source] -> Result cfg
+configify [] = error "configify: no sources!"
+configify sources = sequence (get <$> sources) >>= merge
   where
-    proxy = Proxy :: Proxy cfg
-
-    _get :: Source -> Either Error Aeson.Value
-    _get (ConfigFileYaml sbs) = parseConfigFile proxy sbs
-    _get (ShellEnv env)       = parseShellEnv proxy env
-    _get (CommandLine args)   = parseCommandLine proxy args
-
-    _parse :: Aeson.Value -> Either Error cfg
-    _parse = either (Left . InvalidJSON) (Right) . Aeson.parseEither Aeson.parseJSON
+    get :: Source -> Either Error mval
+    get (ConfigFileYaml sbs) = parseConfigFile sbs
+    get (ShellEnv env)       = parseShellEnv env
+--    get (CommandLine args)   = parseCommandLine proxy args
 
 
--- * json / yaml
 
-class HasParseConfigFile cfg where
-    parseConfigFile :: Proxy cfg -> SBS -> Either Error Aeson.Value
+-- * yaml / json
 
-instance HasParseConfigFile cfg where
-    parseConfigFile Proxy sbs = mapLeft InvalidYaml $ Yaml.decodeEither sbs
+parseConfigFile :: ( t ~ Tagged cfg (ToConfig cfg Maybe)
+                   , FromJSON t
+                   )
+        => SBS -> Either Error t
+parseConfigFile = mapLeft InvalidYaml . Yaml.decodeEither
 
-instance (KnownSymbol path, FromJSON v) => FromJSON (path :> v) where
-    parseJSON = Aeson.withObject "config object" $ \ m ->
-        let proxy = Proxy :: Proxy path
-            key = cs $ symbolVal proxy
-        in L <$> m Aeson..: key
+renderConfigFile :: ( t ~ Tagged cfg (ToConfig cfg Identity)
+                    , t' ~ Tagged cfg (ToConfig cfg Maybe)
+                    , ToJSON t'
+                    , Merge cfg
+                    )
+        => t -> SBS
+renderConfigFile = Yaml.encode . thaw
 
-instance (FromJSON o1, FromJSON o2)
-        => FromJSON (o1 :| o2) where
-    parseJSON value = (:|) <$> (Aeson.parseJSON value :: Aeson.Parser o1)
-                           <*> (Aeson.parseJSON value :: Aeson.Parser o2)
 
-instance (KnownSymbol path, KnownSymbol descr, FromJSON v) => FromJSON (path :> v :>: descr) where
-    parseJSON = Aeson.withObject "config object" $ \ m ->
-        let key = cs $ symbolVal (Proxy :: Proxy path)
-        in D . L <$> m Aeson..: key
+-- ** render json
 
-instance (KnownSymbol path, ToJSON v) => ToJSON (path :> v) where
-    toJSON (L v) = object [cs (symbolVal (Proxy :: Proxy path)) Aeson..= toJSON v]
+-- | @instance ToJSON Choice@
+instance ( t1 ~ ToConfig cfg1 Maybe, ToJSON (Tagged cfg1 t1)
+         , t2 ~ ToConfig cfg2 Maybe, ToJSON (Tagged cfg2 t2)
+         , t' ~ ToConfig (Choice cfg1 cfg2) Maybe
+         )
+        => ToJSON (Tagged (Choice cfg1 cfg2) t') where
+    toJSON (Tagged (o1 :| o2)) = case ( toJSON (Tagged o1 :: Tagged cfg1 t1)
+                                      , toJSON (Tagged o2 :: Tagged cfg2 t2)
+                                      ) of
+        (Object m1, Object m2) -> Object $ HashMap.union m2 m1
+        (v, Null)              -> v
+        (_, v')                -> v'
 
-instance (ToJSON o1, ToJSON o2) => ToJSON (o1 :| o2) where
-    toJSON (o1 :| o2) = toJSON o1 <<>> toJSON o2
+-- | @instance ToJSON Label@
+instance ( t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t)
+         , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s
+         )
+        => ToJSON (Tagged (Label s cfg) t') where
+    toJSON (Tagged Nothing) = object []
+    toJSON (Tagged (Just v)) = if val == Aeson.Null then object [] else object [key .= val]
+      where
+        key = cs $ symbolVal (Proxy :: Proxy s)
+        val = toJSON (Tagged v :: Tagged cfg t)
 
-instance (KnownSymbol path, KnownSymbol descr, ToJSON v) => ToJSON (path :> v :>: descr) where
-    toJSON (D l) = toJSON l
+-- | @instance ToJSON List@
+instance (t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t))
+        => ToJSON (Tagged (List cfg) [t]) where
+    toJSON (Tagged vs) = toJSON $ (Tagged :: t -> Tagged cfg t) <$> vs
+
+-- | @instance ToJSON Option@
+instance (t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t))
+        => ToJSON (Tagged (Option cfg) (Maybe t)) where
+    toJSON (Tagged (Just v)) = toJSON $ (Tagged v :: Tagged cfg t)
+    toJSON (Tagged Nothing)  = Aeson.Null
+
+-- | @instance ToJSON Type@
+instance (ToJSON a) => ToJSON (Tagged (Type a) a) where
+    toJSON (Tagged v) = toJSON v
+
+
+-- ** parse json
+
+-- | @instance FromJSON Choice@
+instance ( t1 ~ ToConfig cfg1 Maybe, FromJSON (Tagged cfg1 t1)
+         , t2 ~ ToConfig cfg2 Maybe, FromJSON (Tagged cfg2 t2)
+         , t' ~ ToConfig (Choice cfg1 cfg2) Maybe
+         )
+        => FromJSON (Tagged (Choice cfg1 cfg2) t') where
+    parseJSON json = do
+        Tagged o1 :: Tagged cfg1 t1 <- Aeson.parseJSON json
+        Tagged o2 :: Tagged cfg2 t2 <- Aeson.parseJSON json
+        return . Tagged $ o1 :| o2
+
+-- | @instance FromJSON Label@ (tolerates unknown fields in json object.)
+instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
+         , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s
+         )
+        => FromJSON (Tagged (Label s cfg) t') where
+    parseJSON = Aeson.withObject "configifier object" $ \ m ->
+          case HashMap.lookup key m of
+            (Just json) -> Tagged . Just . fromTagged <$> parseJSON' json
+            Nothing     -> return $ Tagged Nothing
+        where
+          key = cs $ symbolVal (Proxy :: Proxy s)
+          parseJSON' :: Aeson.Value -> Aeson.Parser (Tagged cfg t) = Aeson.parseJSON
+
+-- | @instance ParseJSON List@
+instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
+         , t' ~ ToConfig (List cfg) Maybe
+         )
+        => FromJSON (Tagged (List cfg) t') where
+    parseJSON = Aeson.withArray "configifier list" $ \ vector -> do
+        vector' :: [Tagged cfg t] <- sequence $ Aeson.parseJSON <$> Vector.toList vector
+        return . Tagged . (fromTagged <$>) $ vector'
+
+-- | @instance ParseJSON Option@
+instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
+         , t' ~ ToConfig (Option cfg) Maybe
+         )
+        => FromJSON (Tagged (Option cfg) t') where
+    parseJSON Null = return (Tagged Nothing :: Tagged (Option cfg) t')
+    parseJSON v = do
+        Tagged js :: Tagged cfg t <- Aeson.parseJSON v
+        return $ (Tagged (Just js) :: Tagged (Option cfg) t')
+
+-- | @instance FromJSON Type@
+instance (FromJSON a) => FromJSON (Tagged (Type a) a) where
+    parseJSON = (Tagged <$>) . Aeson.parseJSON
 
 
 -- * shell env.
 
 type Env = [(String, String)]
 
-class HasParseShellEnv a where
-    parseShellEnv :: Proxy a -> Env -> Either Error Aeson.Value
+class HasParseShellEnv (cfg :: ConfigCode *) where
+    parseShellEnv :: Env -> Either Error (Tagged cfg (ToConfig cfg Maybe))
 
-class HasParseShellEnv' a where
-    parseShellEnv' :: Proxy a -> Env -> Either Error Aeson.Pair
+instance (HasParseShellEnv a, HasParseShellEnv b) => HasParseShellEnv (Choice a b) where
+    parseShellEnv env = do
+        Tagged x :: Tagged a (ToConfig a Maybe) <- parseShellEnv env
+        Tagged y :: Tagged b (ToConfig b Maybe) <- parseShellEnv env
+        return . Tagged $ x :| y
 
-instance HasParseShellEnv Int where
-    parseShellEnv Proxy [("", s)] = Aeson.Number <$> _catch (readMay s)
+-- | The paths into the recursive structure of the config file are
+-- concatenated to shell variable names with separating '_'.  (It is
+-- still ok to have '_' in your config path names.  This parser chops
+-- off complete matching names, whether they contain '_' or not, and
+-- only then worries about trailing '_'.)
+instance (KnownSymbol path, HasParseShellEnv a) => HasParseShellEnv (Label path a) where
+    parseShellEnv env = if null env'
+          then Left $ ShellEnvSegmentNotFound key
+          else do
+              Tagged a :: Tagged a (ToConfig a Maybe) <- parseShellEnv env'
+              return $ Tagged (Just a)
       where
-        _catch = maybe (Left $ ShellEnvNoParse ("Int", s)) Right
+        key = symbolVal (Proxy :: Proxy path)
+        env' = catMaybes $ crop <$> env
 
-instance HasParseShellEnv Bool where
-    parseShellEnv Proxy [("", s)] = Aeson.Bool <$> _catch (readMay s)
+        crop :: (String, String) -> Maybe (String, String)
+        crop (k, v) = case splitAt (length key) k of
+            (key', s@"")        | mk key == mk key' -> Just (s, v)
+            (key', '_':s@(_:_)) | mk key == mk key' -> Just (s, v)
+            _                                       -> Nothing
+
+-- | You can provide a list value via the shell environment by
+-- providing a single element.  This element will be put into a list
+-- implicitly.
+--
+-- (A more general approach that allows for yaml-encoded list values
+-- in shell variables is more tricky to design, implement, and use: If
+-- you have a list of sub-configs and don't want the entire sub-config
+-- to be yaml-encoded, but use a longer shell variable name to go
+-- further down to deeper sub-configs, there is a lot of ambiguity.
+-- It may be possible to resolve that at run-time, but it's more
+-- tricky.)
+instance (HasParseShellEnv a) => HasParseShellEnv (List a) where
+    parseShellEnv env = do
+        Tagged a :: Tagged a (ToConfig a Maybe) <- parseShellEnv env
+        return $ Tagged [a]
+
+instance HasParseShellEnv a => HasParseShellEnv (Option a) where
+    parseShellEnv env = do
+        Tagged a :: Tagged a (ToConfig a Maybe) <- parseShellEnv env
+        return $ Tagged (Just a)
+
+instance (Typeable a, FromJSON (Tagged (Type a) a)) => HasParseShellEnv (Type a) where
+    parseShellEnv [("", s)] = mapLeft renderError (Yaml.decodeEither (cs s) :: Either String (Tagged (Type a) a))
       where
-        _catch = maybe (Left $ ShellEnvNoParse ("Bool", s)) Right
-
-instance HasParseShellEnv ST where
-    parseShellEnv Proxy [("", s)] = Right . Aeson.String $ cs s
-
--- | since shell env is not ideally suitable for providing
--- arbitrary-length lists of sub-configs, we cheat: if a value is fed
--- into a place where a list of values is expected, a singleton list
--- is constructed implicitly.
-instance HasParseShellEnv a => HasParseShellEnv [a] where
-    parseShellEnv Proxy = fmap (Aeson.Array . Vector.fromList . (:[])) . parseShellEnv (Proxy :: Proxy a)
-
--- | the sub-object structure of the config file is represented by '_'
--- in the shell variable names.  (i think it's still ok to have '_' in
--- your config variable names instead of caml case; this parser first
--- chops off matching names, then worries about trailing '_'.)
-instance (KnownSymbol path, HasParseShellEnv v) => HasParseShellEnv (path :> v) where
-    parseShellEnv Proxy env = do
-        let key = symbolVal (Proxy :: Proxy path)
-            env' = catMaybes $ _crop <$> env
-
-            _crop :: (String, String) -> Maybe (String, String)
-            _crop (k, v) = case splitAt (length key) k of
-                (key', s@"")        | mk key == mk key' -> Just (s, v)
-                (key', '_':s@(_:_)) | mk key == mk key' -> Just (s, v)
-                _                                       -> Nothing
-
-        if null env'
-            then Left $ ShellEnvSegmentNotFound key
-            else do
-                val :: Aeson.Value <- parseShellEnv (Proxy :: Proxy v) env'
-                return $ object [cs key Aeson..= val]
-
-instance (KnownSymbol path, HasParseShellEnv v, HasParseShellEnv o) => HasParseShellEnv (path :> v :| o) where
-    parseShellEnv Proxy env = mergeAndCatch
-             [ parseShellEnv (Proxy :: Proxy o)           env
-             , parseShellEnv (Proxy :: Proxy (path :> v)) env
-             ]
-
-instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v) => HasParseShellEnv (path :> v :>: descr) where
-    parseShellEnv Proxy = parseShellEnv (Proxy :: Proxy (path :> v))
-
-instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v, HasParseShellEnv o) => HasParseShellEnv (path :> v :>: descr :| o) where
-    parseShellEnv Proxy = parseShellEnv (Proxy :: Proxy (path :> v :| o))
+        renderError :: String -> Error
+        renderError e = ShellEnvNoParse (show $ typeOf (undefined :: a), s, e)
 
 
 -- * cli
+
+{-
 
 type Args = [String]
 
@@ -262,76 +386,156 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
     [_, k] -> Right [(cs k, cs v)]
     bad -> Left $ "could not parse long-arg with value: " ++ show (s, v, bad)
 
+-}
+
 
 -- * accessing config values
 
--- ** data types
+-- ** exposed interface
+
+
+
+-- ** more type-level programming...
 
 -- | Type-level lookup of a path in a configuration type.
 -- A path is represented as a list of symbols.
-type family Val (a :: *) (p :: [Symbol]) :: Maybe * where
-  Val a         '[]       = Just a
-  Val (a :| b)  (p ': ps) = OrElse (Val a (p ': ps)) (Val b (p ': ps))
-  Val (a :>: s) (p ': ps) = Val a (p ': ps)
-  Val (p :> t)  (p ': ps) = Val t ps
-  Val a         p         = Nothing
+type family Val (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
+    Val (Choice a b) (p ': ps) = OrElse (Val a (p ': ps)) (Val b (p ': ps))
+    Val (Label p a)  (p ': ps) = Val a ps
+    Val (List a)     ps        = ToRuntimeList (Val a ps)
+    Val (Option a)   ps        = ToRuntimeMaybe (Val a ps)
+    Val (Type a)     '[]       = Just a
+    Val a            ps        = Nothing
 
 -- | This is '<|>' on 'Maybe' lifted to the type level.
 type family OrElse (x :: Maybe k) (y :: Maybe k) :: Maybe k where
-  OrElse (Just x) y = Just x
-  OrElse Nothing  y = y
+    OrElse (Just x) y = Just x
+    OrElse Nothing  y = y
 
 -- | A 'CMaybe' is a static version of 'Maybe', i.e., we know at
 -- compile time whether we have 'Just' or 'Nothing'.
 data CMaybe (a :: Maybe *) where
-  CNothing :: CMaybe Nothing
-  CJust    :: a -> CMaybe (Just a)
+    CNothing :: CMaybe Nothing
+    CJust    :: a -> CMaybe (Just a)
 
 -- | This is a version of '<|>' on 'Maybe' for 'CMaybe'.
 combine :: CMaybe a -> CMaybe b -> CMaybe (OrElse a b)
 combine (CJust x) _ = CJust x
 combine CNothing  y = y
 
+type family ToRuntimeMaybe (a :: Maybe *) :: Maybe * where
+    ToRuntimeMaybe (Just x) = Just (Maybe x)
+    ToRuntimeMaybe Nothing  = Nothing
 
--- ** exposed interface
+type family ToRuntimeList (a :: Maybe *) :: Maybe * where
+    ToRuntimeList (Just x) = Just [x]
+    ToRuntimeList Nothing  = Nothing
+
+
+-- | Run 'Val' types on 'ToConfig' values.
+--
+-- We need the 'Val' constraint in some instances because overlapping
+-- instances and closed type families aren't fully compatible.  GHC
+-- won't be able to recognize that we've already excluded the other
+-- cases and not reduce 'Val' automatically.  But the constraint
+-- should always resolve, unless we've made a mistake, and the worst
+-- outcome if we did are extra type errors, not run-time errors.
+class (v ~ RunIdentity (ToConfig cfg Identity)) => Sel cfg ps v where
+    sel :: Proxy cfg -> Proxy ps -> v -> CMaybe (Val cfg ps)
+
+instance ( (v :| w) ~ ToConfig (Choice a b) Identity
+         , Val (Choice a b) ps ~ OrElse (Val a ps) (Val b ps)
+         , v ~ ToConfig a Identity
+         , w ~ ToConfig b Identity
+         , Sel a ps v
+         , Sel b ps w
+         ) => Sel (Choice a b) ps (v :| w) where
+    sel Proxy ps (v :| w) = combine (sel (Proxy :: Proxy a) ps v) (sel (Proxy :: Proxy b) ps w)
+
+instance ( v ~ RunIdentity (ToConfig (Label p cfg) Identity)
+         , Val (Label p cfg) (p ': ps) ~ Val cfg ps
+         , Sel cfg ps v
+         ) => Sel (Label p cfg) (p ': ps) v where
+    sel Proxy Proxy v = sel (Proxy :: Proxy cfg) (Proxy :: Proxy ps) v
+
+
+instance (v ~ RunIdentity (ToConfig (List cfg) Identity)) => Sel (List cfg) ps v where
+    sel = error "instance Sel List"
+
+{-
+-- | this just gives you a list of config objects.  (FUTURE WORK: it
+-- would be nice to be able to descent further into this list inside
+-- the same path list.)
+instance ( v ~ ToConfig (List cfg) Identity
+         , v ~ [w]
+
+         , Val (List cfg) '[] ~ ToRuntimeList (Val cfg '[])
+         , ToRuntimeList (Val cfg '[]) ~ Just x
+         , Just x ~ Val cfg '[]
+
+         ) => Sel (List cfg) '[] v where
+    sel Proxy Proxy x = CJust x
+-}
+
+
+instance (v ~ RunIdentity (ToConfig (Option cfg) Identity)) => Sel (Option cfg) ps v where
+    sel = error "instance Sel Option"
+
+{-
+instance ( (Maybe v) ~ ToConfig (Option cfg) Identity
+         , Sel cfg ps v
+         , Val (Option cfg) ps ~ ToRuntimeMaybe (Val cfg ps)
+         ) => Sel (Option cfg) ps (Maybe v) where
+    sel Proxy Proxy _ = undefined
+
+--    sel Proxy Proxy (Just v) = Just <$> sel (Proxy :: Proxy a) (Proxy :: Proxy ps) v
+--    sel Proxy Proxy Nothing  = CJust Nothing
+-}
+
+
+instance (a ~ RunIdentity a) => Sel (Type a) '[] a where
+    sel Proxy Proxy x = CJust x
+
+instance ( v ~ RunIdentity (ToConfig cfg Identity)
+         , Val cfg ps ~ Nothing
+         ) => Sel cfg ps v where
+    sel _ _ _ = CNothing
+
+
+-- tests (FIXME: move to hspecs module)
+
+type X1 = ToConfigCode ("a" :> Int)
+-- type X1 = ToConfigCode (Option ("a" :> Int))
+
+x1 :: Tagged X1 (ToConfig X1 Maybe)
+x1 = Tagged $ Just 3
+-- x1 = Tagged $ Just (Just 3)
+
+x2 :: Tagged X1 (ToConfig X1 Identity)
+Right x2 = freeze x1
+
+x3 :: ( Val X1 '["a"] ~ Just Int  -- this is just to test that ghc agrees with me.  nothing to do with x3's value.
+      , a ~ Int, a ~ RunIdentity a )  -- this is just out of desperation...
+    => a
+x3 = x2 .>> (Proxy :: Proxy '["a"])
+
 
 -- | This is a wrapper around 'sel' that hides the interal use of
 -- 'CMaybe'.  As we expect, this version will just cause a type error
 -- if it is applied to an illegal path.
-(>.) :: forall a p r . (Sel a p, ValE a p ~ Done r) => a -> Proxy p -> r
-(>.) cfg p = case sel cfg p of
-  CJust x  -> x
-  _        -> error "inaccessible"
+(.>>) :: forall cfg ps v r r'
+       . ( v ~ ToConfig cfg Identity
+         , Val cfg ps ~ Just r
+         , r ~ RunIdentity r
+         , Sel cfg ps v
+         ) => Tagged cfg v -> Proxy ps -> r
+(.>>) (Tagged v) path = case sel (Proxy :: Proxy cfg) path v of
+    CJust x  -> x
+    _        -> error "inaccessible"
 
--- | FIXME: is it possible to remove 'CMaybe' from the signature and
--- return @Val a p@ instead?
-class Sel a p where
-  sel :: a -> Proxy p -> CMaybe (Val a p)
 
 
--- ** implementation of 'Sel'
-
-instance Sel a '[] where
-  sel x _ = CJust x
-
-instance Sel a (p ': ps) => Sel (a :>: s) (p ': ps) where
-  sel (D x) _ = sel x (Proxy :: Proxy (p ': ps))
-
-instance Sel t ps => Sel (p :> t) (p ': ps) where
-  sel (L x) _ = sel x (Proxy :: Proxy ps)
-
-instance (Sel a (p ': ps), Sel b (p ': ps)) => Sel (a :| b) (p ': ps) where
-  sel (x :| y) _ = combine (sel x (Proxy :: Proxy (p ': ps))) (sel y (Proxy :: Proxy (p ': ps)))
-
--- | We need the 'Val' constraint here because overlapping instances
--- and closed type families aren't fully compatible.  GHC won't be
--- able to recognize that we've already excluded the other cases and
--- not reduce 'Val' automatically.  But the constraint should always
--- resolve, unless we've made a mistake, and the worst outcome if we
--- did are extra type errors, not run-time errors.
-instance (Val a ps ~ Nothing) => Sel a ps where
-  sel _ _ = CNothing
-
+{-
 
 -- ** better errors
 
@@ -342,42 +546,97 @@ data LookupFailed a p
 type ValE (a :: *) (p :: [Symbol]) = ToExc (LookupFailed a p) (Val a p)
 
 type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
-  ToExc a Nothing  = Fail a
-  ToExc a (Just x) = Done x
+    ToExc a Nothing  = Fail a
+    ToExc a (Just x) = Done x
+
+-}
 
 
 -- * merge configs
 
--- | Merge two json trees such that the latter overwrites nodes in the
--- former.  'Null' is considered as non-existing.  Otherwise, right
--- values overwrite left values.
-(<<>>) :: Aeson.Value -> Aeson.Value -> Aeson.Value
-(<<>>) (Object m) (Object m') = object $ f <$> ks
+merge :: forall cfg . Merge cfg
+        => [Tagged cfg (ToConfig cfg Maybe)]
+        -> Either Error (Tagged cfg (ToConfig cfg Identity))
+merge = freeze . f
   where
-    ks :: [ST]
-    ks = Set.toList . Set.fromList $ HashMap.keys m ++ HashMap.keys m'
+    f (fmap fromTagged -> x:xs) = Tagged $ foldl (mrg (Proxy :: Proxy cfg)) x xs
+    f [] = error "merge: empty list."
 
-    f :: ST -> Aeson.Pair
-    f k = k Aeson..=
-        case (k `HashMap.lookup` m, k `HashMap.lookup` m') of
-            (Just v,  Just v') -> v <<>> v'
-            (Nothing, Just v') -> v'
-            (Just v,  Nothing) -> v
-            (Nothing, Nothing) -> assert False $ error "internal error in (<<>>)"
+freeze :: forall cfg . Merge cfg
+        => Tagged cfg (ToConfig cfg Maybe)
+        -> Either Error (Tagged cfg (ToConfig cfg Identity))
+freeze = fmap Tagged . frz (Proxy :: Proxy cfg) [] . fromTagged
 
-(<<>>) v Null = v
-(<<>>) _ v'   = v'
+thaw :: forall cfg . Merge cfg
+        => Tagged cfg (ToConfig cfg Identity)
+        -> Tagged cfg (ToConfig cfg Maybe)
+thaw = Tagged . thw (Proxy :: Proxy cfg) . fromTagged
 
-merge :: [Aeson.Value] -> Aeson.Value
-merge = foldl (<<>>) Aeson.Null
 
-mergeAndCatch :: [Either Error Aeson.Value] -> Either Error Aeson.Value
-mergeAndCatch = foldl (\ ev ev' -> (<<>>) <$> c'tcha ev <*> c'tcha ev') (Right Null)
-  where
-    -- (this name is a sound from the samurai jack title tune.  it
-    -- has nothing to do with this, but it sounds nice.  go watch
-    -- samurai jack!)
-    c'tcha = (`catchError` \ _ -> return Null)
+class Merge c where
+    mrg :: Proxy c -> ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
+    frz :: Proxy c -> [String] -> ToConfig c Maybe -> Either Error (ToConfig c Identity)
+    thw :: Proxy c -> ToConfig c Identity -> ToConfig c Maybe
+
+instance (Merge a, Merge b) => Merge (Choice a b) where
+    mrg Proxy (x :| y) (x' :| y') =
+           mrg (Proxy :: Proxy a) x x'
+        :| mrg (Proxy :: Proxy b) y y'
+
+    frz Proxy path (x :| y) = do
+        x' <- frz (Proxy :: Proxy a) path x
+        y' <- frz (Proxy :: Proxy b) path y
+        Right $ x' :| y'
+
+    thw Proxy (x :| y) =
+        let x' = thw (Proxy :: Proxy a) x in
+        let y' = thw (Proxy :: Proxy b) y in
+        x' :| y'
+
+instance (KnownSymbol s, Merge t) => Merge (Label s t) where
+    mrg Proxy (Just x) (Just y) = Just $ mrg (Proxy :: Proxy t) x y
+    mrg Proxy mx my = my <|> mx
+
+    frz Proxy path = f
+      where
+        path' = symbolVal (Proxy :: Proxy s) : path
+        f (Just x) = Identity <$> frz (Proxy :: Proxy t) path' x
+        f Nothing  = Left $ FreezeIncomplete path'
+
+    thw Proxy (Identity x) = Just $ thw (Proxy :: Proxy t) x
+
+instance (Merge c) => Merge (List c) where
+    mrg Proxy _ ys = ys
+    frz Proxy path xs = sequence $ frz (Proxy :: Proxy c) path <$> xs
+    thw Proxy xs = thw (Proxy :: Proxy c) <$> xs
+
+-- | FIXME: if a non-optional part of an optional sub-config is
+-- missing, the 'FreezeIncomplete' error is ignored and the entire
+-- sub-config is cleared.  it would be better to distinguish between
+-- the cases `sub-config missing` and `sub-config provided
+-- incompletely`, and still raise an error in the latter.
+instance ( ToConfig ('Option c) Maybe ~ Maybe tm
+         , ToConfig ('Option c) Identity ~ Maybe ti
+         , tm ~ ToConfig c Maybe
+         , ti ~ ToConfig c Identity
+         , Merge c
+         ) => Merge (Option c) where
+    mrg Proxy mx my = my <|> mx
+
+    frz :: Proxy ('Option c)
+        -> [String]
+        -> ToConfig ('Option c) Maybe  -- (if i replace this with @Maybe tm@, ghc 7.8.4 gives up.)
+        -> Either Error (ToConfig ('Option c) Identity)
+    frz Proxy path (Just (mx :: tm)) = Just <$> frz (Proxy :: Proxy c) path mx
+    frz Proxy path Nothing           = Right Nothing
+
+    thw Proxy (Just mx) = Just $ thw (Proxy :: Proxy c) mx
+    thw Proxy Nothing   = Nothing
+
+instance Merge (Type c) where
+    mrg Proxy _ y = y
+    frz Proxy _ x = Right x
+    thw Proxy x = x
 
 
 -- * docs.
@@ -391,44 +650,53 @@ docs proxy = renderDoc (Proxy :: Proxy ConfigFile)  (toDoc proxy)
           <> renderDoc (Proxy :: Proxy ShellEnv)    (toDoc proxy)
           <> renderDoc (Proxy :: Proxy CommandLine) (toDoc proxy)
 
+
 data Doc =
-    DocDict [(String, Maybe String, Doc)]
+    DocDict [(String, Maybe String, Doc, DocOptional)]
   | DocList Doc
-  | DocBase String
+  | DocType String
+  deriving (Eq, Ord, Show, Read, Typeable)
+
+data DocOptional = DocMandatory | DocOptional
   deriving (Eq, Ord, Show, Read, Typeable)
 
 concatDoc :: Doc -> Doc -> Doc
-concatDoc (DocDict xs) (DocDict ys) = DocDict . sort $ xs ++ ys
+concatDoc (DocDict xs) (DocDict ys) = DocDict $ xs ++ ys
 concatDoc bad bad' = error $ "concatDoc: " ++ show (bad, bad')
 
-
-class HasToDoc a where
+class HasToDoc (a :: ConfigCode *) where
     toDoc :: Proxy a -> Doc
 
-_makeDocPair :: (KnownSymbol path, KnownSymbol descr, HasToDoc v)
-      => Proxy path -> Maybe (Proxy descr) -> Proxy v -> Doc
-_makeDocPair pathProxy descrProxy vProxy = DocDict [(symbolVal pathProxy, symbolVal <$> descrProxy, toDoc vProxy)]
+instance (HasToDoc a, HasToDoc b) => HasToDoc (Choice a b) where
+    toDoc Proxy = toDoc (Proxy :: Proxy a) `concatDoc` toDoc (Proxy :: Proxy b)
 
-instance (KnownSymbol path, HasToDoc v) => HasToDoc (path :> v) where
-    toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Nothing :: Maybe (Proxy path)) (Proxy :: Proxy v)
+instance (KnownSymbol path, HasToDoc a) => HasToDoc (Label path a) where
+    toDoc Proxy = DocDict
+        [( symbolVal (Proxy :: Proxy path)
+         , Nothing
+         , toDoc (Proxy :: Proxy a)
+         , DocMandatory
+         )]
 
-instance (KnownSymbol path, KnownSymbol descr, HasToDoc v) =>  HasToDoc (path :> v :>: descr) where
-    toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Just (Proxy :: Proxy descr)) (Proxy :: Proxy v)
+instance (HasToDoc a, KnownSymbol path, KnownSymbol descr)
+        => HasToDoc (Descr (Label path a) descr) where
+    toDoc Proxy = DocDict
+        [( symbolVal (Proxy :: Proxy path)
+         , Just $ symbolVal (Proxy :: Proxy descr)
+         , toDoc (Proxy :: Proxy a)
+         , DocMandatory
+         )]
 
-instance (HasToDoc o1, HasToDoc o2) => HasToDoc (o1 :| o2) where
-    toDoc Proxy = toDoc (Proxy :: Proxy o1) `concatDoc` toDoc (Proxy :: Proxy o2)
+instance (HasToDoc a) => HasToDoc (List a) where
+    toDoc Proxy = DocList $ toDoc (Proxy :: Proxy a)
 
-instance HasToDoc a => HasToDoc [a] where
-    toDoc Proxy = DocList . toDoc $ (Proxy :: Proxy a)
+instance (HasToDoc a) => HasToDoc (Option a) where
+    toDoc Proxy = case toDoc (Proxy :: Proxy a) of
+        DocDict xs -> DocDict $ (\ (p, d, t, _) -> (p, d, t, DocOptional)) <$> xs
+        bad -> error $ "HasToDoc Option: " ++ show bad
 
-instance HasToDoc ST where
-    toDoc Proxy = DocBase "string"
-
-instance HasToDoc Int where
-    toDoc Proxy = DocBase "number"
-
-instance HasToDoc Bool where
-    toDoc Proxy = DocBase "boolean"
+instance (Typeable a) => HasToDoc (Type a) where
+    toDoc Proxy = DocType . show $ typeOf (undefined :: a)
 
 
 class HasRenderDoc t where
@@ -447,11 +715,14 @@ instance HasRenderDoc ConfigFile where
         f :: Doc -> [String]
         f (DocDict xs)   = concat $ map g xs
         f (DocList x)    = indent "- " $ f x
-        f (DocBase base) = [base]
+        f (DocType base) = [base]
 
-        g :: (String, Maybe String, Doc) -> [String]
-        g (key, Just mDescr, subdoc) = ("# " <> mDescr) : (key <> ":") : indent "  " (f subdoc)
-        g (key, Nothing,     subdoc) =                    (key <> ":") : indent "  " (f subdoc)
+        g :: (String, Maybe String, Doc, DocOptional) -> [String]
+        g (key, mDescr, subdoc, optional) =
+            maybe [] (\ descr -> ["# " <> descr]) mDescr ++
+            [ "# [optional]" | case optional of DocMandatory -> False; DocOptional -> True ] ++
+            (key <> ":") : indent "  " (f subdoc) ++
+            [""]
 
         indent :: String -> [String] -> [String]
         indent start = lines . (start <>) . intercalate "\n  "
@@ -469,7 +740,7 @@ instance HasRenderDoc ShellEnv where
         f :: [(String, Maybe String)] -> Doc -> [String]
         f acc (DocDict xs) = concat $ map (g acc) xs
         f acc (DocList x) = f acc x
-        f (reverse -> acc) (DocBase base) =
+        f (reverse -> acc) (DocType base) =
                 shellvar :
                 ("    type: " ++ base) :
                 (let xs = catMaybes (mkd <$> acc) in
@@ -484,8 +755,8 @@ instance HasRenderDoc ShellEnv where
             mkd (_,   Nothing)    = Nothing
             mkd (key, Just descr) = Just $ "        " ++ (toUpper <$> key) ++ ": " ++ descr
 
-        g :: [(String, Maybe String )] -> (String, Maybe String, Doc) -> [String]
-        g acc (key, descr, subdoc) = f ((key, descr) : acc) subdoc
+        g :: [(String, Maybe String)] -> (String, Maybe String, Doc, DocOptional) -> [String]
+        g acc (key, descr, subdoc, _) = f ((key, descr) : acc) subdoc
 
 instance HasRenderDoc CommandLine where
     renderDoc Proxy _ = cs . unlines $
