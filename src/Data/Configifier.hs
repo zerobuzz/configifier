@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds       #-}
+{-# LANGUAGE DeriveFunctor         #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE DeriveDataTypeable    #-}
 {-# LANGUAGE EmptyDataDecls        #-}
@@ -120,18 +121,18 @@ data Error =  -- FIXME: are these all in use?
 instance Exception Error
 
 configify :: forall cfg val mval .
-      ( val ~ ToConfig cfg Identity
-      , mval ~ ToConfig cfg Maybe
+      ( val ~ Tagged cfg (ToConfig cfg Identity)
+      , mval ~ Tagged cfg (ToConfig cfg Maybe)
       , Merge cfg
-      , FromJSON (Tagged cfg mval)
+      , FromJSON mval
 --      , HasParseShellEnv cfg
 --      , HasParseCommandLine cfg
-      ) => Proxy cfg -> [Source] -> Either Error val
-configify proxy [] = error "configify: no sources!"
-configify proxy sources = sequence (get <$> sources) >>= merge proxy
+      ) => [Source] -> Either Error val
+configify [] = error "configify: no sources!"
+configify sources = sequence (get <$> sources) >>= merge
   where
     get :: Source -> Either Error mval
-    get (ConfigFileYaml sbs) = parseConfigFile proxy sbs :: Either Error mval
+    get (ConfigFileYaml sbs) = parseConfigFile sbs :: Either Error mval
 --    get (ShellEnv env)       = parseShellEnv proxy env
 --    get (CommandLine args)   = parseCommandLine proxy args
 
@@ -139,11 +140,9 @@ configify proxy sources = sequence (get <$> sources) >>= merge proxy
 
 -- * yaml / json
 
-parseConfigFile :: forall cfg t . (t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t))
-        => Proxy cfg -> SBS -> Either Error t
-parseConfigFile Proxy sbs = case Yaml.decodeEither sbs of
-    Right (Tagged v :: Tagged cfg t) -> Right v
-    Left msg -> Left $ InvalidYaml msg
+parseConfigFile :: forall cfg t . (t ~ Tagged cfg (ToConfig cfg Maybe), FromJSON t)
+        => SBS -> Either Error t
+parseConfigFile = mapLeft InvalidYaml . Yaml.decodeEither
 
 renderConfigFile :: (t ~ Tagged cfg (ToConfig cfg Identity), ToJSON t)
         => t -> SBS
@@ -447,14 +446,20 @@ type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
 
 -- * merge configs
 
-merge :: Merge c => Proxy c -> [ToConfig c Maybe] -> Either Error (ToConfig c Identity)
-merge Proxy [] = error "merge: empty list."
-merge proxy (x:xs) = frz proxy $ foldl (mrg proxy) x xs
+merge :: forall cfg . Merge cfg => [Tagged cfg (ToConfig cfg Maybe)] -> Either Error (Tagged cfg (ToConfig cfg Identity))
+merge [] = error "merge: empty list."
+merge (fmap fromTagged -> x:xs) = Tagged <$> frz proxy (foldl (mrg proxy) x xs)
+  where proxy = Proxy :: Proxy cfg
+
+freeze :: forall cfg . Merge cfg => Tagged cfg (ToConfig cfg Maybe) -> Either Error (Tagged cfg (ToConfig cfg Identity))
+freeze = fmap Tagged . frz (Proxy :: Proxy cfg) . fromTagged
+
+thaw :: forall cfg . Merge cfg => Tagged cfg (ToConfig cfg Identity) -> Tagged cfg (ToConfig cfg Maybe)
+thaw = Tagged . thw (Proxy :: Proxy cfg) . fromTagged
 
 
--- | Merge two partial configs.
 class Merge c where
-    mrg  :: Proxy c -> ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
+    mrg :: Proxy c -> ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
     frz :: Proxy c -> ToConfig c Maybe -> Either Error (ToConfig c Identity)
     thw :: Proxy c -> ToConfig c Identity -> ToConfig c Maybe
 
@@ -483,12 +488,12 @@ instance (Merge t) => Merge (Label s t) where
     thw Proxy (Identity x) = Just $ thw (Proxy :: Proxy t) x
 
 instance (Merge c) => Merge (List c) where
-    mrg Proxy xs ys = xs ++ ys  -- FIXME: how to delete / overwrite previously configured list values?
+    mrg Proxy _ ys = ys
     frz Proxy xs = sequence $ frz (Proxy :: Proxy c) <$> xs
     thw Proxy xs = thw (Proxy :: Proxy c) <$> xs
 
 instance Merge (Type c) where
-    mrg Proxy _ y = y  -- FIXME: but we need to descend into these, too!
+    mrg Proxy _ y = y
     frz Proxy x = Right x
     thw Proxy x = x
 
