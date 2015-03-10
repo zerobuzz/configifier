@@ -53,7 +53,7 @@ import qualified Data.Yaml as Yaml
 import qualified Text.Regex.Easy as Regex
 
 
--- * type combinators
+-- * config types
 
 -- | Construction of config records (@cons@ for record fields).
 data a :| b = a :| b
@@ -69,8 +69,6 @@ data a :>: (s :: Symbol)
 infixr 8 :>:
 
 
--- * ...
-
 data ConfigCode k =
       Choice (ConfigCode k) (ConfigCode k)
     | Descr  (ConfigCode k) Symbol
@@ -79,6 +77,7 @@ data ConfigCode k =
     | Type   k
 
 infixr 6 `Choice`
+
 
 -- | Map user-provided config type to 'ConfigCode' types.
 type family ToConfigCode (k :: *) :: ConfigCode * where
@@ -109,6 +108,20 @@ data ConfigFile
 data ShellEnv
 data CommandLine
 
+
+-- * tagged values
+
+data Tagged cfg t = Tagged t
+  deriving (Eq, Ord, Show, Typeable)
+
+fromTagged :: Tagged cfg t -> t
+fromTagged (Tagged t) = t
+
+
+-- * results and errors
+
+type Result cfg = Either Error (Tagged cfg (ToConfig cfg Identity))
+
 data Error =  -- FIXME: are these all in use?
       InvalidYaml String
     | ShellEnvNoParse (String, String, String)
@@ -120,14 +133,16 @@ data Error =  -- FIXME: are these all in use?
 
 instance Exception Error
 
-configify :: forall cfg val mval .
-      ( val ~ Tagged cfg (ToConfig cfg Identity)
-      , mval ~ Tagged cfg (ToConfig cfg Maybe)
+
+-- * the main function
+
+configify :: forall cfg mval .
+      ( mval ~ Tagged cfg (ToConfig cfg Maybe)
       , Merge cfg
       , FromJSON mval
 --      , HasParseShellEnv cfg
 --      , HasParseCommandLine cfg
-      ) => [Source] -> Either Error val
+      ) => [Source] -> Result cfg
 configify [] = error "configify: no sources!"
 configify sources = sequence (get <$> sources) >>= merge
   where
@@ -140,22 +155,19 @@ configify sources = sequence (get <$> sources) >>= merge
 
 -- * yaml / json
 
-parseConfigFile :: forall cfg t . (t ~ Tagged cfg (ToConfig cfg Maybe), FromJSON t)
+parseConfigFile :: ( t ~ Tagged cfg (ToConfig cfg Maybe)
+                   , FromJSON t
+                   )
         => SBS -> Either Error t
 parseConfigFile = mapLeft InvalidYaml . Yaml.decodeEither
 
-renderConfigFile :: (t ~ Tagged cfg (ToConfig cfg Identity), ToJSON t)
+renderConfigFile :: ( t ~ Tagged cfg (ToConfig cfg Identity)
+                    , t' ~ Tagged cfg (ToConfig cfg Maybe)
+                    , ToJSON t'
+                    , Merge cfg
+                    )
         => t -> SBS
-renderConfigFile = Yaml.encode
-
-
--- ** tagged values
-
-data Tagged cfg t = Tagged t
-  deriving (Eq, Ord, Show, Typeable)
-
-fromTagged :: Tagged cfg t -> t
-fromTagged (Tagged t) = t
+renderConfigFile = Yaml.encode . thaw
 
 
 -- ** render json
@@ -163,7 +175,8 @@ fromTagged (Tagged t) = t
 -- | @instance ToJSON Choice@
 instance ( t1 ~ ToConfig cfg1 Maybe, ToJSON (Tagged cfg1 t1)
          , t2 ~ ToConfig cfg2 Maybe, ToJSON (Tagged cfg2 t2)
-         , t' ~ ToConfig (Choice cfg1 cfg2) Maybe)
+         , t' ~ ToConfig (Choice cfg1 cfg2) Maybe
+         )
         => ToJSON (Tagged (Choice cfg1 cfg2) t') where
     toJSON (Tagged (o1 :| o2)) = case ( toJSON (Tagged o1 :: Tagged cfg1 t1)
                                       , toJSON (Tagged o2 :: Tagged cfg2 t2)
@@ -173,7 +186,8 @@ instance ( t1 ~ ToConfig cfg1 Maybe, ToJSON (Tagged cfg1 t1)
 
 -- | @instance ToJSON Label@
 instance ( t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t)
-         , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s)
+         , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s
+         )
         => ToJSON (Tagged (Label s cfg) t') where
     toJSON (Tagged Nothing) = object []
     toJSON (Tagged (Just v)) = object [key Aeson..= val]
@@ -196,7 +210,8 @@ instance (ToJSON a) => ToJSON (Tagged (Type a) a) where
 -- | @instance FromJSON Choice@
 instance ( t1 ~ ToConfig cfg1 Maybe, FromJSON (Tagged cfg1 t1)
          , t2 ~ ToConfig cfg2 Maybe, FromJSON (Tagged cfg2 t2)
-         , t' ~ ToConfig (Choice cfg1 cfg2) Maybe)
+         , t' ~ ToConfig (Choice cfg1 cfg2) Maybe
+         )
         => FromJSON (Tagged (Choice cfg1 cfg2) t') where
     parseJSON json = do
         Tagged o1 :: Tagged cfg1 t1 <- Aeson.parseJSON json
@@ -205,7 +220,8 @@ instance ( t1 ~ ToConfig cfg1 Maybe, FromJSON (Tagged cfg1 t1)
 
 -- | @instance FromJSON Label@ (tolerates unknown fields in parsed object.)
 instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
-         , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s)
+         , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s
+         )
         => FromJSON (Tagged (Label s cfg) t') where
     parseJSON = Aeson.withObject "configifier object" $ \ m ->
         let key = cs $ symbolVal (Proxy :: Proxy s)
@@ -217,7 +233,8 @@ instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
 
 -- | @instance ParseJSON List@
 instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
-         , t' ~ ToConfig (List cfg) Maybe )
+         , t' ~ ToConfig (List cfg) Maybe
+         )
         => FromJSON (Tagged (List cfg) t') where
     parseJSON = Aeson.withArray "configifier list" $ \ vector -> do
         vector' :: [Tagged cfg t] <- sequence $ Aeson.parseJSON <$> Vector.toList vector
@@ -446,15 +463,21 @@ type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
 
 -- * merge configs
 
-merge :: forall cfg . Merge cfg => [Tagged cfg (ToConfig cfg Maybe)] -> Either Error (Tagged cfg (ToConfig cfg Identity))
+merge :: forall cfg . Merge cfg
+        => [Tagged cfg (ToConfig cfg Maybe)]
+        -> Either Error (Tagged cfg (ToConfig cfg Identity))
 merge [] = error "merge: empty list."
 merge (fmap fromTagged -> x:xs) = Tagged <$> frz proxy (foldl (mrg proxy) x xs)
   where proxy = Proxy :: Proxy cfg
 
-freeze :: forall cfg . Merge cfg => Tagged cfg (ToConfig cfg Maybe) -> Either Error (Tagged cfg (ToConfig cfg Identity))
+freeze :: forall cfg . Merge cfg
+        => Tagged cfg (ToConfig cfg Maybe)
+        -> Either Error (Tagged cfg (ToConfig cfg Identity))
 freeze = fmap Tagged . frz (Proxy :: Proxy cfg) . fromTagged
 
-thaw :: forall cfg . Merge cfg => Tagged cfg (ToConfig cfg Identity) -> Tagged cfg (ToConfig cfg Maybe)
+thaw :: forall cfg . Merge cfg
+        => Tagged cfg (ToConfig cfg Identity)
+        -> Tagged cfg (ToConfig cfg Maybe)
 thaw = Tagged . thw (Proxy :: Proxy cfg) . fromTagged
 
 

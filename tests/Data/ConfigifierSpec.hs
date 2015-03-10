@@ -35,6 +35,9 @@ spec = describe "Configifier" $ do
 
 misc :: Spec
 misc = describe "misc" $ do
+    undefined
+
+{-
     describe "<<>>" $ do
         it "does not crash" . property $ \ a b -> (length . show $ a <<>> b) > 0
 
@@ -89,3 +92,5 @@ cfg's =
 
 subCfg :: SubCfg
 subCfg = entry False
+
+-}
