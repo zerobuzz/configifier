@@ -11,11 +11,12 @@
 {-# LANGUAGE PolyKinds             #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
 {-# LANGUAGE ViewPatterns          #-}
 
-{-# LANGUAGE UndecidableInstances  #-}  -- should only be required to run 'HasParseCommandLine'; remove later!
+{-# LANGUAGE UndecidableInstances  #-}  -- remove later!
 
 {-# OPTIONS  #-}
 
@@ -37,6 +38,7 @@ import Data.String.Conversions (ST, SBS, cs, (<>))
 import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Safe (readMay)
+import Text.Show.Pretty (ppShow)
 
 -- (FIXME: can i replace aeson entirely with yaml?  right now, the mix
 -- of use of both is rather chaotic.)
@@ -68,29 +70,29 @@ infixr 8 :>:
 
 -- * ...
 
-data ConfigCode a =
-      Choice (ConfigCode a) (ConfigCode a)
-    | Descr  (ConfigCode a) Symbol
-    | Label  Symbol (ConfigCode a)
-    | List   (ConfigCode a)
-    | Type   a
+data ConfigCode k =
+      Choice (ConfigCode k) (ConfigCode k)
+    | Descr  (ConfigCode k) Symbol
+    | Label  Symbol (ConfigCode k)
+    | List   (ConfigCode k)
+    | Type   k
 
 infixr 6 `Choice`
 
 -- | Map user-provided config type to 'ConfigCode' types.
-type family ToConfigCode (x :: *) :: ConfigCode * where
+type family ToConfigCode (k :: *) :: ConfigCode * where
     ToConfigCode (a :| b)       = Choice (ToConfigCode a) (ToConfigCode b)
-    ToConfigCode (s :> t :>: s) = Descr (ToConfigCode (s :> t)) s
-    ToConfigCode (s :> t)       = Label s (ToConfigCode t)
+    ToConfigCode (s :> a :>: s) = Descr (ToConfigCode (s :> a)) s
+    ToConfigCode (s :> a)       = Label s (ToConfigCode a)
     ToConfigCode [a]            = List (ToConfigCode a)
     ToConfigCode a              = Type a
 
 -- | Map 'ConfgCode' types to the types of config values.
-type family ToConfig (c :: ConfigCode *) (f :: * -> *) :: * where
+type family ToConfig (k :: ConfigCode *) (f :: * -> *) :: * where
     ToConfig (Choice a b) f = ToConfig a f :| ToConfig b f
     ToConfig (Descr a d)  f = ToConfig a f
-    ToConfig (Label s t)  f = f (ToConfig t f)
-    ToConfig (List c)     f = [ToConfig c f]
+    ToConfig (Label s a)  f = f (ToConfig a f)
+    ToConfig (List a)     f = [ToConfig a f]
     ToConfig (Type a)     f = a
 
 
@@ -106,7 +108,7 @@ data ConfigFile
 data ShellEnv
 data CommandLine
 
-data Error =
+data Error =  -- FIXME: are these all in use?
       InvalidYaml String
     | ShellEnvNoParse (String, String, String)
     | ShellEnvSegmentNotFound String
@@ -121,7 +123,7 @@ configify :: forall cfg val mval .
       ( val ~ ToConfig cfg Identity
       , mval ~ ToConfig cfg Maybe
       , Merge cfg
-      , HasParseConfigFile cfg
+      , FromJSON (Tagged cfg mval)
 --      , HasParseShellEnv cfg
 --      , HasParseCommandLine cfg
       ) => Proxy cfg -> [Source] -> Either Error val
@@ -129,66 +131,108 @@ configify proxy [] = error "configify: no sources!"
 configify proxy sources = sequence (get <$> sources) >>= merge proxy
   where
     get :: Source -> Either Error mval
-    get (ConfigFileYaml sbs) = parseConfigFile proxy sbs
+    get (ConfigFileYaml sbs) = parseConfigFile proxy sbs :: Either Error mval
 --    get (ShellEnv env)       = parseShellEnv proxy env
 --    get (CommandLine args)   = parseCommandLine proxy args
 
 
 
-class HasParseConfigFile cfg where
-    parseConfigFile :: Proxy cfg -> SBS -> Either Error (ToConfig cfg Maybe)
+-- * yaml / json
+
+parseConfigFile :: forall cfg t . (t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t))
+        => Proxy cfg -> SBS -> Either Error t
+parseConfigFile Proxy sbs = case Yaml.decodeEither sbs of
+    Right (Tagged v :: Tagged cfg t) -> Right v
+    Left msg -> Left $ InvalidYaml msg
+
+renderConfigFile :: (t ~ Tagged cfg (ToConfig cfg Identity), ToJSON t)
+        => t -> SBS
+renderConfigFile = Yaml.encode
 
 
+-- ** tagged values
 
-{-
+data Tagged cfg t = Tagged t
+  deriving (Eq, Ord, Show, Typeable)
 
--- * json / yaml
+fromTagged :: Tagged cfg t -> t
+fromTagged (Tagged t) = t
 
-class HasParseConfigFile cfg where
-    parseConfigFile :: Proxy cfg -> SBS -> Either Error Aeson.Value
 
-instance HasParseConfigFile cfg where
-    parseConfigFile Proxy sbs = mapLeft InvalidYaml $ Yaml.decodeEither sbs
+-- ** render json
 
-instance (KnownSymbol path, FromJSON v) => FromJSON (path :> v) where
-    parseJSON = Aeson.withObject "config object" $ \ m ->
-        let proxy = Proxy :: Proxy path
-            key = cs $ symbolVal proxy
-        in L <$> m Aeson..: key
+-- | @instance ToJSON Choice@
+instance ( t1 ~ ToConfig cfg1 Maybe, ToJSON (Tagged cfg1 t1)
+         , t2 ~ ToConfig cfg2 Maybe, ToJSON (Tagged cfg2 t2)
+         , t' ~ ToConfig (Choice cfg1 cfg2) Maybe)
+        => ToJSON (Tagged (Choice cfg1 cfg2) t') where
+    toJSON (Tagged (o1 :| o2)) = case ( toJSON (Tagged o1 :: Tagged cfg1 t1)
+                                      , toJSON (Tagged o2 :: Tagged cfg2 t2)
+                                      ) of
+        (Object m1, Object m2) -> Object $ HashMap.union m2 m1
+        (_, v')                -> v'
 
-instance (FromJSON o1, FromJSON o2)
-        => FromJSON (o1 :| o2) where
-    parseJSON value = (:|) <$> (Aeson.parseJSON value :: Aeson.Parser o1)
-                           <*> (Aeson.parseJSON value :: Aeson.Parser o2)
+-- | @instance ToJSON Label@
+instance ( t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t)
+         , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s)
+        => ToJSON (Tagged (Label s cfg) t') where
+    toJSON (Tagged Nothing) = object []
+    toJSON (Tagged (Just v)) = object [key Aeson..= val]
+      where
+        key = cs $ symbolVal (Proxy :: Proxy s)
+        val = toJSON (Tagged v :: Tagged cfg t)
 
-instance (KnownSymbol path, KnownSymbol descr, FromJSON v) => FromJSON (path :> v :>: descr) where
-    parseJSON = Aeson.withObject "config object" $ \ m ->
-        let key = cs $ symbolVal (Proxy :: Proxy path)
-        in D . L <$> m Aeson..: key
+-- | @instance ToJSON List@
+instance (t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t))
+        => ToJSON (Tagged (List cfg) [t]) where
+    toJSON (Tagged vs) = toJSON $ (Tagged :: t -> Tagged cfg t) <$> vs
 
-instance (KnownSymbol path, ToJSON v) => ToJSON (path :> v) where
-    toJSON (L v) = object [cs (symbolVal (Proxy :: Proxy path)) Aeson..= toJSON v]
+-- | @instance ToJSON Type@
+instance (ToJSON a) => ToJSON (Tagged (Type a) a) where
+    toJSON (Tagged v) = toJSON v
 
-instance (ToJSON o1, ToJSON o2) => ToJSON (o1 :| o2) where
-    toJSON (o1 :| o2) = toJSON o1 <<>> toJSON o2
 
-instance (KnownSymbol path, KnownSymbol descr, ToJSON v) => ToJSON (path :> v :>: descr) where
-    toJSON (D l) = toJSON l
+-- ** parse json
 
--- | Basic parts of the config structure parse as yaml in all sources:
--- In order to pass a value of type '[(Int, Int)]' via shell env with
--- @CFG_FIELD="[(3, 4), (1, 2)]"@, wrap the 'field' part of the config
--- structure in 'Basic':
---
--- > type Cfg = "field" :> Basic [(Int, Int)]
-newtype Basic a = Basic a
-  deriving (Eq, Ord, Show, Read, Typeable)
+-- | @instance FromJSON Choice@
+instance ( t1 ~ ToConfig cfg1 Maybe, FromJSON (Tagged cfg1 t1)
+         , t2 ~ ToConfig cfg2 Maybe, FromJSON (Tagged cfg2 t2)
+         , t' ~ ToConfig (Choice cfg1 cfg2) Maybe)
+        => FromJSON (Tagged (Choice cfg1 cfg2) t') where
+    parseJSON json = do
+        Tagged o1 :: Tagged cfg1 t1 <- Aeson.parseJSON json
+        Tagged o2 :: Tagged cfg2 t2 <- Aeson.parseJSON json
+        return . Tagged $ o1 :| o2
 
-instance (ToJSON v) => HasParseConfigFile (Basic v) where
-    parseConfigFile Proxy sbs = parseConfigFile (Proxy :: Proxy v) sbs
+-- | @instance FromJSON Label@ (tolerates unknown fields in parsed object.)
+instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
+         , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s)
+        => FromJSON (Tagged (Label s cfg) t') where
+    parseJSON = Aeson.withObject "configifier object" $ \ m ->
+        let key = cs $ symbolVal (Proxy :: Proxy s)
+            parseJSON' :: Aeson.Value -> Aeson.Parser (Tagged cfg t) = Aeson.parseJSON
+            retag :: t' -> Tagged (Label s cfg) t' = Tagged
+        in case HashMap.lookup key m of
+            (Just json) -> retag . Just . fromTagged <$> parseJSON' json
+            Nothing     -> return $ retag Nothing
+
+-- | @instance ParseJSON List@
+instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
+         , t' ~ ToConfig (List cfg) Maybe )
+        => FromJSON (Tagged (List cfg) t') where
+    parseJSON = Aeson.withArray "configifier list" $ \ vector -> do
+        vector' :: [Tagged cfg t] <- sequence $ Aeson.parseJSON <$> Vector.toList vector
+        return . Tagged . (fromTagged <$>) $ vector'
+
+-- | @instance FromJSON Type@
+instance (FromJSON a) => FromJSON (Tagged (Type a) a) where
+    parseJSON = (Tagged <$>) . Aeson.parseJSON
 
 
 -- * shell env.
+
+
+{-
 
 type Env = [(String, String)]
 
@@ -405,30 +449,48 @@ type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
 
 merge :: Merge c => Proxy c -> [ToConfig c Maybe] -> Either Error (ToConfig c Identity)
 merge Proxy [] = error "merge: empty list."
-merge proxy (x:xs) = _freeze proxy $ foldl (_merge proxy) x xs
+merge proxy (x:xs) = frz proxy $ foldl (mrg proxy) x xs
 
 
 -- | Merge two partial configs.
 class Merge c where
-    _merge  :: Proxy c -> ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
-    _freeze :: Proxy c -> ToConfig c Maybe -> Either Error (ToConfig c Identity)
+    mrg  :: Proxy c -> ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
+    frz :: Proxy c -> ToConfig c Maybe -> Either Error (ToConfig c Identity)
+    thw :: Proxy c -> ToConfig c Identity -> ToConfig c Maybe
 
 instance (Merge a, Merge b) => Merge (Choice a b) where
-    _merge Proxy (x :| y) (x' :| y') = _merge (Proxy :: Proxy a) x x' :| _merge (Proxy :: Proxy b) y y'
-    _freeze Proxy (x :| y) = do
-        x' <- _freeze (Proxy :: Proxy a) x
-        y' <- _freeze (Proxy :: Proxy b) y
+    mrg Proxy (x :| y) (x' :| y') =
+           mrg (Proxy :: Proxy a) x x'
+        :| mrg (Proxy :: Proxy b) y y'
+
+    frz Proxy (x :| y) = do
+        x' <- frz (Proxy :: Proxy a) x
+        y' <- frz (Proxy :: Proxy b) y
         Right $ x' :| y'
 
+    thw Proxy (x :| y) =
+        let x' = thw (Proxy :: Proxy a) x in
+        let y' = thw (Proxy :: Proxy b) y in
+        x' :| y'
+
 instance (Merge t) => Merge (Label s t) where
-    _merge Proxy (Just x) (Just y) = Just $ _merge (Proxy :: Proxy t) x y
-    _merge Proxy mx       my       = my <|> mx
-    _freeze Proxy (Just x) = Identity <$> _freeze (Proxy :: Proxy t) x
-    _freeze Proxy Nothing = Left FreezeIncomplete
+    mrg Proxy (Just x) (Just y) = Just $ mrg (Proxy :: Proxy t) x y
+    mrg Proxy mx my = my <|> mx
+
+    frz Proxy (Just x) = Identity <$> frz (Proxy :: Proxy t) x
+    frz Proxy Nothing = Left FreezeIncomplete
+
+    thw Proxy (Identity x) = Just $ thw (Proxy :: Proxy t) x
 
 instance (Merge c) => Merge (List c) where
-    _merge Proxy xs ys = xs ++ ys  -- FIXME: how to delete / overwrite previously configured list values?
-    _freeze Proxy xs = sequence $ _freeze (Proxy :: Proxy c) <$> xs
+    mrg Proxy xs ys = xs ++ ys  -- FIXME: how to delete / overwrite previously configured list values?
+    frz Proxy xs = sequence $ frz (Proxy :: Proxy c) <$> xs
+    thw Proxy xs = thw (Proxy :: Proxy c) <$> xs
+
+instance Merge (Type c) where
+    mrg Proxy _ y = y  -- FIXME: but we need to descend into these, too!
+    frz Proxy x = Right x
+    thw Proxy x = x
 
 
 -- * docs.
