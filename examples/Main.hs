@@ -62,12 +62,22 @@ type Cfg' =
 type ServerCfg =
      "bind_port"   :> Int
   :| "bind_host"   :> ST
-  :| "expose_host" :> ST
+  :| "expose_host" :> ST  -- FIXME: Maybe ST (render and parse properly)
 
 type UserCfg =
      "name"     :> ST -- :>: "user name (must be unique)"
   :| "email"    :> ST -- :>: "email address (must also be unique)"
   :| "password" :> ST -- :>: "password (not encrypted)"
+
+
+defaultCfg :: Tagged Cfg (ToConfig Cfg Identity)
+defaultCfg = Tagged $
+     Identity (Identity 8001 :| Identity "localhost" :| Identity "expose")
+  :| Identity (Identity 8002 :| Identity "localhost" :| Identity "oxpose")
+  :| Identity [u1, u2]
+  where
+    u1 = Identity "ralf" :| Identity "ralf@localhost" :| Identity "gandalf"
+    u2 = Identity "claudi" :| Identity "claudi@remotehost" :| Identity "also_gandalf"
 
 
 main :: IO ()
@@ -82,11 +92,16 @@ main = do
 
     -- ST.putStrLn $ docs (Proxy :: Proxy Cfg)
 
-    case configify sources :: Result Cfg of
-        Left e -> print e
-        Right cfg -> do
+    let dump cfg = do
             putStrLn $ ppShow cfg
             putStrLn . cs . renderConfigFile $ cfg
+
+    dump defaultCfg
+
+    case configify sources :: Result Cfg of
+        Left e -> print e
+        Right cfg -> dump cfg
+
 
 {-
             putStrLn "accessing config values:"
