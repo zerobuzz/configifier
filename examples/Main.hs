@@ -47,7 +47,14 @@ ex2 = (Tagged $ Just False :| Just 3)
 ex3 :: (cfg ~ ToConfigCode ("bla" :> Int :| "lub" :> [Bool]), t ~ ToConfig cfg Maybe) => Tagged cfg t
 ex3 = (Tagged $ Just 3 :| Just [False, True])
 
-test = putStrLn $ ppShow (renderConfigFile ex0, toJSON ex1, toJSON ex2, toJSON ex3)
+ex4 :: ( ToConfig (NoDesc (ToConfigCode ("bla" :> Int :>: "dwfw"))) Maybe ~
+         ToConfig (NoDesc (ToConfigCode ("bla" :> Int)))            Maybe
+       , cfg ~ NoDesc (ToConfigCode ("bla" :> Int :>: "dwfw"))
+       , t ~ ToConfig cfg Maybe
+       ) => Tagged cfg t
+ex4 = Tagged $ Just 3
+
+test = putStrLn $ ppShow (renderConfigFile ex0, toJSON ex1, toJSON ex2, toJSON ex3, toJSON ex4)
 
 
 -- * an interesting example
@@ -55,25 +62,25 @@ test = putStrLn $ ppShow (renderConfigFile ex0, toJSON ex1, toJSON ex2, toJSON e
 type Cfg = ToConfigCode Cfg'
 
 type Cfg' =
-     "frontend" :> ServerCfg
+     "frontend" :> ServerCfg :>: "descr"
   :| "backend" :> ServerCfg
-  :| "default_users" :> [UserCfg] -- :>: "list of users that are created on start if database is empty"
+  :| "default_users" :> [UserCfg] :>: "list of users that are created on start if database is empty"
 
 type ServerCfg =
      "bind_port"   :> Int
   :| "bind_host"   :> ST
-  :| "expose_host" :> ST  -- FIXME: Maybe ST (render and parse properly)
+  :| "expose_host" :> Maybe ST
 
 type UserCfg =
-     "name"     :> ST -- :>: "user name (must be unique)"
-  :| "email"    :> ST -- :>: "email address (must also be unique)"
-  :| "password" :> ST -- :>: "password (not encrypted)"
+     "name"     :> ST :>: "user name (must be unique)"
+  :| "email"    :> ST :>: "email address (must also be unique)"
+  :| "password" :> ST :>: "password (not encrypted)"
 
 
-defaultCfg :: Tagged Cfg (ToConfig Cfg Identity)
+defaultCfg :: Tagged (NoDesc Cfg) (ToConfig (NoDesc Cfg) Identity)
 defaultCfg = Tagged $
-     Identity (Identity 8001 :| Identity "localhost" :| Identity "expose")
-  :| Identity (Identity 8002 :| Identity "localhost" :| Identity "oxpose")
+     Identity (Identity 8001 :| Identity "localhost" :| Identity (Just "expose"))
+  :| Identity (Identity 8002 :| Identity "localhost" :| Identity Nothing)
   :| Identity [u1, u2]
   where
     u1 = Identity "ralf" :| Identity "ralf@localhost" :| Identity "gandalf"
@@ -98,7 +105,7 @@ main = do
 
     dump defaultCfg
 
-    case configify sources :: Result Cfg of
+    case configify sources :: Result (NoDesc Cfg) of
         Left e -> print e
         Right cfg -> dump cfg
 

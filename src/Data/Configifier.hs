@@ -17,7 +17,7 @@
 {-# LANGUAGE TypeOperators         #-}
 {-# LANGUAGE ViewPatterns          #-}
 
-{-# LANGUAGE UndecidableInstances  #-}  -- remove later!
+{-# LANGUAGE UndecidableInstances  #-}  -- is there a way to remove this?
 
 {-# OPTIONS  #-}
 
@@ -62,18 +62,24 @@ infixr 6 :|
 
 -- | Construction of config record fields.
 data (s :: Symbol) :> (t :: *)
+  deriving (Typeable)
 infixr 9 :>
 
 -- | Add descriptive text to record field for documentation.
 data a :>: (s :: Symbol)
+  deriving (Typeable)
 infixr 8 :>:
 
 
 data ConfigCode k =
       Choice (ConfigCode k) (ConfigCode k)
-    | Descr  (ConfigCode k) Symbol
     | Label  Symbol (ConfigCode k)
+    | Descr  (ConfigCode k) Symbol
     | List   (ConfigCode k)
+    | Option (ConfigCode k)  -- FIXME: missing optional args trigger
+                             -- 'IncompleteFreeze' errors.  i probably
+                             -- should inject one more 'Just'
+                             -- somewhere in the 'frz' for 'Option'?
     | Type   k
 
 infixr 6 `Choice`
@@ -81,18 +87,28 @@ infixr 6 `Choice`
 
 -- | Map user-provided config type to 'ConfigCode' types.
 type family ToConfigCode (k :: *) :: ConfigCode * where
-    ToConfigCode (a :| b)       = Choice (ToConfigCode a) (ToConfigCode b)
-    ToConfigCode (s :> a :>: s) = Descr (ToConfigCode (s :> a)) s
-    ToConfigCode (s :> a)       = Label s (ToConfigCode a)
-    ToConfigCode [a]            = List (ToConfigCode a)
-    ToConfigCode a              = Type a
+    ToConfigCode (a :| b)  = Choice (ToConfigCode a) (ToConfigCode b)
+    ToConfigCode (s :> a)  = Label s (ToConfigCode a)
+    ToConfigCode (a :>: s) = Descr (ToConfigCode a) s
+    ToConfigCode [a]       = List (ToConfigCode a)
+    ToConfigCode (Maybe a) = Option (ToConfigCode a)
+    ToConfigCode a         = Type a
+
+-- | Filter 'Descr' constructors from 'ConfigCode'.
+type family NoDesc (k :: ConfigCode *) :: ConfigCode * where
+    NoDesc (Choice a b) = Choice (NoDesc a) (NoDesc b)
+    NoDesc (Label s a)  = Label s (NoDesc a)
+    NoDesc (Descr a s)  = NoDesc a
+    NoDesc (List a)     = List (NoDesc a)
+    NoDesc (Option a)   = Option (NoDesc a)
+    NoDesc (Type a)     = Type a
 
 -- | Map 'ConfgCode' types to the types of config values.
 type family ToConfig (k :: ConfigCode *) (f :: * -> *) :: * where
     ToConfig (Choice a b) f = ToConfig a f :| ToConfig b f
-    ToConfig (Descr a d)  f = ToConfig a f
     ToConfig (Label s a)  f = f (ToConfig a f)
     ToConfig (List a)     f = [ToConfig a f]
+    ToConfig (Option a)   f = Maybe (ToConfig a f)
     ToConfig (Type a)     f = a
 
 
@@ -190,7 +206,7 @@ instance ( t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t)
          )
         => ToJSON (Tagged (Label s cfg) t') where
     toJSON (Tagged Nothing) = object []
-    toJSON (Tagged (Just v)) = object [key Aeson..= val]
+    toJSON (Tagged (Just v)) = if val == Aeson.Null then object [] else object [key Aeson..= val]
       where
         key = cs $ symbolVal (Proxy :: Proxy s)
         val = toJSON (Tagged v :: Tagged cfg t)
@@ -199,6 +215,11 @@ instance ( t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t)
 instance (t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t))
         => ToJSON (Tagged (List cfg) [t]) where
     toJSON (Tagged vs) = toJSON $ (Tagged :: t -> Tagged cfg t) <$> vs
+
+-- | @instance ToJSON Option@
+instance (t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t))
+        => ToJSON (Tagged (Option cfg) (Maybe t)) where
+    toJSON (Tagged mv) = toJSON $ (Tagged :: t -> Tagged cfg t) <$> mv
 
 -- | @instance ToJSON Type@
 instance (ToJSON a) => ToJSON (Tagged (Type a) a) where
@@ -218,7 +239,7 @@ instance ( t1 ~ ToConfig cfg1 Maybe, FromJSON (Tagged cfg1 t1)
         Tagged o2 :: Tagged cfg2 t2 <- Aeson.parseJSON json
         return . Tagged $ o1 :| o2
 
--- | @instance FromJSON Label@ (tolerates unknown fields in parsed object.)
+-- | @instance FromJSON Label@ (tolerates unknown fields in json object.)
 instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
          , t' ~ ToConfig (Label s cfg) Maybe, KnownSymbol s
          )
@@ -239,6 +260,16 @@ instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
     parseJSON = Aeson.withArray "configifier list" $ \ vector -> do
         vector' :: [Tagged cfg t] <- sequence $ Aeson.parseJSON <$> Vector.toList vector
         return . Tagged . (fromTagged <$>) $ vector'
+
+-- | @instance ParseJSON Option@
+instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
+         , t' ~ ToConfig (Option cfg) Maybe
+         )
+        => FromJSON (Tagged (Option cfg) t') where
+    parseJSON Null = return (Tagged Nothing :: Tagged (Option cfg) t')
+    parseJSON v = do
+        Tagged js :: Tagged cfg t <- Aeson.parseJSON v
+        return $ (Tagged (Just js) :: Tagged (Option cfg) t')
 
 -- | @instance FromJSON Type@
 instance (FromJSON a) => FromJSON (Tagged (Type a) a) where
@@ -504,7 +535,7 @@ instance (Merge t) => Merge (Label s t) where
     mrg Proxy mx my = my <|> mx
 
     frz Proxy (Just x) = Identity <$> frz (Proxy :: Proxy t) x
-    frz Proxy Nothing = Left FreezeIncomplete
+    frz Proxy Nothing = Left FreezeIncomplete  -- FIXME: we need better error reporting!
 
     thw Proxy (Identity x) = Just $ thw (Proxy :: Proxy t) x
 
@@ -512,6 +543,15 @@ instance (Merge c) => Merge (List c) where
     mrg Proxy _ ys = ys
     frz Proxy xs = sequence $ frz (Proxy :: Proxy c) <$> xs
     thw Proxy xs = thw (Proxy :: Proxy c) <$> xs
+
+instance (Merge c) => Merge (Option c) where
+    mrg Proxy mx my = my <|> mx
+
+    frz Proxy (Just mx) = Just <$> frz (Proxy :: Proxy c) mx
+    frz Proxy Nothing   = Right Nothing
+
+    thw Proxy (Just mx) = Just $ thw (Proxy :: Proxy c) mx
+    thw Proxy Nothing   = Nothing
 
 instance Merge (Type c) where
     mrg Proxy _ y = y
