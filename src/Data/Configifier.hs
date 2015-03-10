@@ -561,8 +561,6 @@ instance Merge (Type c) where
 
 -- * docs.
 
-{-
-
 docs :: ( HasToDoc a
         , HasRenderDoc ConfigFile
         , HasRenderDoc ShellEnv
@@ -572,44 +570,47 @@ docs proxy = renderDoc (Proxy :: Proxy ConfigFile)  (toDoc proxy)
           <> renderDoc (Proxy :: Proxy ShellEnv)    (toDoc proxy)
           <> renderDoc (Proxy :: Proxy CommandLine) (toDoc proxy)
 
+
 data Doc =
     DocDict [(String, Maybe String, Doc)]
   | DocList Doc
-  | DocBase String
+  | DocOption Doc
+  | DocType String
   deriving (Eq, Ord, Show, Read, Typeable)
 
 concatDoc :: Doc -> Doc -> Doc
 concatDoc (DocDict xs) (DocDict ys) = DocDict . sort $ xs ++ ys
 concatDoc bad bad' = error $ "concatDoc: " ++ show (bad, bad')
 
-
-class HasToDoc a where
+class HasToDoc (a :: ConfigCode *) where
     toDoc :: Proxy a -> Doc
 
-_makeDocPair :: (KnownSymbol path, KnownSymbol descr, HasToDoc v)
-      => Proxy path -> Maybe (Proxy descr) -> Proxy v -> Doc
-_makeDocPair pathProxy descrProxy vProxy = DocDict [(symbolVal pathProxy, symbolVal <$> descrProxy, toDoc vProxy)]
+instance (HasToDoc a, HasToDoc b) => HasToDoc (Choice a b) where
+    toDoc Proxy = toDoc (Proxy :: Proxy a) `concatDoc` toDoc (Proxy :: Proxy b)
 
-instance (KnownSymbol path, HasToDoc v) => HasToDoc (path :> v) where
-    toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Nothing :: Maybe (Proxy path)) (Proxy :: Proxy v)
+instance (KnownSymbol path, HasToDoc a) => HasToDoc (Label path a) where
+    toDoc Proxy = DocDict
+        [( symbolVal (Proxy :: Proxy path)
+         , Nothing
+         , toDoc (Proxy :: Proxy a)
+         )]
 
-instance (KnownSymbol path, KnownSymbol descr, HasToDoc v) =>  HasToDoc (path :> v :>: descr) where
-    toDoc Proxy = _makeDocPair (Proxy :: Proxy path) (Just (Proxy :: Proxy descr)) (Proxy :: Proxy v)
+instance (HasToDoc a, KnownSymbol path, KnownSymbol descr)
+        => HasToDoc (Descr (Label path a) descr) where
+    toDoc Proxy = DocDict
+        [( symbolVal (Proxy :: Proxy path)
+         , Just $ symbolVal (Proxy :: Proxy descr)
+         , toDoc (Proxy :: Proxy a)
+         )]
 
-instance (HasToDoc o1, HasToDoc o2) => HasToDoc (o1 :| o2) where
-    toDoc Proxy = toDoc (Proxy :: Proxy o1) `concatDoc` toDoc (Proxy :: Proxy o2)
+instance (HasToDoc a) => HasToDoc (List a) where
+    toDoc Proxy = DocList $ toDoc (Proxy :: Proxy a)
 
-instance HasToDoc a => HasToDoc [a] where
-    toDoc Proxy = DocList . toDoc $ (Proxy :: Proxy a)
+instance (HasToDoc a) => HasToDoc (Option a) where
+    toDoc Proxy = DocOption $ toDoc (Proxy :: Proxy a)
 
-instance HasToDoc ST where
-    toDoc Proxy = DocBase "string"
-
-instance HasToDoc Int where
-    toDoc Proxy = DocBase "number"
-
-instance HasToDoc Bool where
-    toDoc Proxy = DocBase "boolean"
+instance (Typeable a) => HasToDoc (Type a) where
+    toDoc Proxy = DocType . show $ typeOf (undefined :: a)
 
 
 class HasRenderDoc t where
@@ -628,7 +629,8 @@ instance HasRenderDoc ConfigFile where
         f :: Doc -> [String]
         f (DocDict xs)   = concat $ map g xs
         f (DocList x)    = indent "- " $ f x
-        f (DocBase base) = [base]
+        f (DocOption x)  = indent "[optional] " $ f x
+        f (DocType base) = [base]
 
         g :: (String, Maybe String, Doc) -> [String]
         g (key, Just mDescr, subdoc) = ("# " <> mDescr) : (key <> ":") : indent "  " (f subdoc)
@@ -650,7 +652,8 @@ instance HasRenderDoc ShellEnv where
         f :: [(String, Maybe String)] -> Doc -> [String]
         f acc (DocDict xs) = concat $ map (g acc) xs
         f acc (DocList x) = f acc x
-        f (reverse -> acc) (DocBase base) =
+        f acc (DocOption x) = f acc x
+        f (reverse -> acc) (DocType base) =
                 shellvar :
                 ("    type: " ++ base) :
                 (let xs = catMaybes (mkd <$> acc) in
@@ -678,5 +681,3 @@ instance HasRenderDoc CommandLine where
         "variable, you can also set with a long arg.)" :
         "" :
         []
-
--}

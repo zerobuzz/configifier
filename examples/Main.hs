@@ -97,7 +97,7 @@ main = do
 
     -- putStrLn $ ppShow sources
 
-    -- ST.putStrLn $ docs (Proxy :: Proxy Cfg)
+    ST.putStrLn $ docs (Proxy :: Proxy Cfg)
 
     let dump cfg = do
             putStrLn $ ppShow cfg
