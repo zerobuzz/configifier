@@ -57,7 +57,7 @@ type Cfg = ToConfigCode Cfg'
 type Cfg' =
      "frontend" :> ServerCfg
   :| "backend" :> ServerCfg
-  :| "default_users" :> [UserCfg] :>: "list of users that are created on start if database is empty"
+  :| "default_users" :> [UserCfg] -- :>: "list of users that are created on start if database is empty"
 
 type ServerCfg =
      "bind_port"   :> Int
@@ -65,9 +65,9 @@ type ServerCfg =
   :| "expose_host" :> ST
 
 type UserCfg =
-     "name"     :> ST :>: "user name (must be unique)"
-  :| "email"    :> ST :>: "email address (must also be unique)"
-  :| "password" :> ST :>: "password (not encrypted)"
+     "name"     :> ST -- :>: "user name (must be unique)"
+  :| "email"    :> ST -- :>: "email address (must also be unique)"
+  :| "password" :> ST -- :>: "password (not encrypted)"
 
 
 main :: IO ()
