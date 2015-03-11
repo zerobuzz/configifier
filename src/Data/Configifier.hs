@@ -382,29 +382,41 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
 
 -- * accessing config values
 
-{-
+-- ** exposed interface
 
--- ** data types
+{-
+-- | This is a wrapper around 'sel' that hides the interal use of
+-- 'CMaybe'.  As we expect, this version will just cause a type error
+-- if it is applied to an illegal path.
+(>.) :: forall cfg a p r . (Sel a p, ValE a p ~ Done r) => a -> Proxy p -> r
+(>.) cfg p = case sel cfg p of
+    CJust x  -> x
+    _        -> error "inaccessible"
+-}
+
+
+-- * more type-level programming...
 
 -- | Type-level lookup of a path in a configuration type.
 -- A path is represented as a list of symbols.
-type family Val (a :: *) (p :: [Symbol]) :: Maybe * where
-  Val a         '[]       = Just a
-  Val (a :| b)  (p ': ps) = OrElse (Val a (p ': ps)) (Val b (p ': ps))
-  Val (a :>: s) (p ': ps) = Val a (p ': ps)
-  Val (p :> t)  (p ': ps) = Val t ps
-  Val a         p         = Nothing
+type family Val (k :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
+    Val (Choice a b) (p ': ps) = OrElse (Val a (p ': ps)) (Val b (p ': ps))
+    Val (Label p a)  (p ': ps) = Identity (Val a ps)
+    Val (List a)     (p ': ps) = Val a (p ': ps)
+    Val (Option a)   (p ': ps) = Val a (p ': ps)
+    Val (Type a)     '[]       = Just a
+    Val a            ps        = Nothing
 
 -- | This is '<|>' on 'Maybe' lifted to the type level.
 type family OrElse (x :: Maybe k) (y :: Maybe k) :: Maybe k where
-  OrElse (Just x) y = Just x
-  OrElse Nothing  y = y
+    OrElse (Just x) y = Just x
+    OrElse Nothing  y = y
 
 -- | A 'CMaybe' is a static version of 'Maybe', i.e., we know at
 -- compile time whether we have 'Just' or 'Nothing'.
 data CMaybe (a :: Maybe *) where
-  CNothing :: CMaybe Nothing
-  CJust    :: a -> CMaybe (Just a)
+    CNothing :: CMaybe Nothing
+    CJust    :: a -> CMaybe (Just a)
 
 -- | This is a version of '<|>' on 'Maybe' for 'CMaybe'.
 combine :: CMaybe a -> CMaybe b -> CMaybe (OrElse a b)
@@ -412,45 +424,55 @@ combine (CJust x) _ = CJust x
 combine CNothing  y = y
 
 
--- ** exposed interface
+class Sel cfg ps v where
+    sel :: Proxy cfg -> Proxy ps -> v -> CMaybe (Val cfg ps)
 
--- | This is a wrapper around 'sel' that hides the interal use of
--- 'CMaybe'.  As we expect, this version will just cause a type error
--- if it is applied to an illegal path.
-(>.) :: forall a p r . (Sel a p, ValE a p ~ Done r) => a -> Proxy p -> r
-(>.) cfg p = case sel cfg p of
-  CJust x  -> x
-  _        -> error "inaccessible"
-
--- | FIXME: is it possible to remove 'CMaybe' from the signature and
--- return @Val a p@ instead?
-class Sel a p where
-  sel :: a -> Proxy p -> CMaybe (Val a p)
+{-
+instance ( Val ('Choice cfg cfg') ps ~ OrElse (Val cfg ps) (Val cfg' ps)
+         ) => Sel (Choice cfg cfg') (v1 :| v2) ps where
+    sel Proxy ps (x :| y) = combine _ _ :: CMaybe (Val ('Choice cfg cfg') ps)
+      where
+        x' = sel (Proxy :: Proxy cfg) ps x
+        y' = sel (Proxy :: Proxy cfg') ps y
+-}
 
 
--- ** implementation of 'Sel'
+instance ( v ~ ToConfig (Label p cfg) Identity
+         , Sel cfg ps (Val cfg ps)
+         ) => Sel (Label p cfg) (p ': ps) v where
+    sel Proxy Proxy v = case sel (Proxy :: Proxy cfg) (Proxy :: Proxy ps) v of
+        x -> _
 
-instance Sel a '[] where
-  sel x _ = CJust x
+--     Could not deduce (Sel cfg ps (Identity (ToConfig cfg Identity)))
+--       arising from a use of ‘sel’
 
-instance Sel a (p ': ps) => Sel (a :>: s) (p ': ps) where
-  sel (D x) _ = sel x (Proxy :: Proxy (p ': ps))
 
-instance Sel t ps => Sel (p :> t) (p ': ps) where
-  sel (L x) _ = sel x (Proxy :: Proxy ps)
+instance Sel (List a) ps v where
+    sel = _
 
-instance (Sel a (p ': ps), Sel b (p ': ps)) => Sel (a :| b) (p ': ps) where
-  sel (x :| y) _ = combine (sel x (Proxy :: Proxy (p ': ps))) (sel y (Proxy :: Proxy (p ': ps)))
+instance Sel (Option a) ps v where
+    sel = _
 
+
+
+instance Sel (Type a) '[] a where
+    sel Proxy Proxy x = CJust x
+
+
+{-
 -- | We need the 'Val' constraint here because overlapping instances
 -- and closed type families aren't fully compatible.  GHC won't be
 -- able to recognize that we've already excluded the other cases and
 -- not reduce 'Val' automatically.  But the constraint should always
 -- resolve, unless we've made a mistake, and the worst outcome if we
 -- did are extra type errors, not run-time errors.
-instance (Val a ps ~ Nothing) => Sel a ps where
-  sel _ _ = CNothing
+instance (Val cfg ps ~ Nothing) => Sel cfg ps v where
+    sel _ _ _ = CNothing
+-}
 
+
+
+{-
 
 -- ** better errors
 
@@ -461,17 +483,10 @@ data LookupFailed a p
 type ValE (a :: *) (p :: [Symbol]) = ToExc (LookupFailed a p) (Val a p)
 
 type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
-  ToExc a Nothing  = Fail a
-  ToExc a (Just x) = Done x
-
-
-@@ FIXME: check out recent changes to relevant gist.
-
+    ToExc a Nothing  = Fail a
+    ToExc a (Just x) = Done x
 
 -}
-
-
-
 
 
 -- * merge configs
