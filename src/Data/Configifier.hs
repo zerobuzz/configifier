@@ -141,7 +141,7 @@ data Error =  -- FIXME: are these all in use?
     | ShellEnvSegmentNotFound String
     | CommandLinePrimitiveParseError String
     | CommandLinePrimitiveOtherError Error
-    | FreezeIncomplete
+    | FreezeIncomplete [String]
   deriving (Eq, Ord, Show, Typeable)
 
 instance Exception Error
@@ -478,14 +478,15 @@ type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
 merge :: forall cfg . Merge cfg
         => [Tagged cfg (ToConfig cfg Maybe)]
         -> Either Error (Tagged cfg (ToConfig cfg Identity))
-merge [] = error "merge: empty list."
-merge (fmap fromTagged -> x:xs) = Tagged <$> frz proxy (foldl (mrg proxy) x xs)
-  where proxy = Proxy :: Proxy cfg
+merge = freeze . f
+  where
+    f (fmap fromTagged -> x:xs) = Tagged $ foldl (mrg (Proxy :: Proxy cfg)) x xs
+    f [] = error "merge: empty list."
 
 freeze :: forall cfg . Merge cfg
         => Tagged cfg (ToConfig cfg Maybe)
         -> Either Error (Tagged cfg (ToConfig cfg Identity))
-freeze = fmap Tagged . frz (Proxy :: Proxy cfg) . fromTagged
+freeze = fmap Tagged . frz (Proxy :: Proxy cfg) [] . fromTagged
 
 thaw :: forall cfg . Merge cfg
         => Tagged cfg (ToConfig cfg Identity)
@@ -495,7 +496,7 @@ thaw = Tagged . thw (Proxy :: Proxy cfg) . fromTagged
 
 class Merge c where
     mrg :: Proxy c -> ToConfig c Maybe -> ToConfig c Maybe -> ToConfig c Maybe
-    frz :: Proxy c -> ToConfig c Maybe -> Either Error (ToConfig c Identity)
+    frz :: Proxy c -> [String] -> ToConfig c Maybe -> Either Error (ToConfig c Identity)
     thw :: Proxy c -> ToConfig c Identity -> ToConfig c Maybe
 
 instance (Merge a, Merge b) => Merge (Choice a b) where
@@ -503,9 +504,9 @@ instance (Merge a, Merge b) => Merge (Choice a b) where
            mrg (Proxy :: Proxy a) x x'
         :| mrg (Proxy :: Proxy b) y y'
 
-    frz Proxy (x :| y) = do
-        x' <- frz (Proxy :: Proxy a) x
-        y' <- frz (Proxy :: Proxy b) y
+    frz Proxy path (x :| y) = do
+        x' <- frz (Proxy :: Proxy a) path x
+        y' <- frz (Proxy :: Proxy b) path y
         Right $ x' :| y'
 
     thw Proxy (x :| y) =
@@ -513,32 +514,35 @@ instance (Merge a, Merge b) => Merge (Choice a b) where
         let y' = thw (Proxy :: Proxy b) y in
         x' :| y'
 
-instance (Merge t) => Merge (Label s t) where
+instance (KnownSymbol s, Merge t) => Merge (Label s t) where
     mrg Proxy (Just x) (Just y) = Just $ mrg (Proxy :: Proxy t) x y
     mrg Proxy mx my = my <|> mx
 
-    frz Proxy (Just x) = Identity <$> frz (Proxy :: Proxy t) x
-    frz Proxy Nothing = Left FreezeIncomplete  -- FIXME: we need better error reporting!
+    frz Proxy path = f
+      where
+        path' = symbolVal (Proxy :: Proxy s) : path
+        f (Just x) = Identity <$> frz (Proxy :: Proxy t) path' x
+        f Nothing  = Left $ FreezeIncomplete path'
 
     thw Proxy (Identity x) = Just $ thw (Proxy :: Proxy t) x
 
 instance (Merge c) => Merge (List c) where
     mrg Proxy _ ys = ys
-    frz Proxy xs = sequence $ frz (Proxy :: Proxy c) <$> xs
+    frz Proxy path xs = sequence $ frz (Proxy :: Proxy c) path <$> xs
     thw Proxy xs = thw (Proxy :: Proxy c) <$> xs
 
 instance (Merge c) => Merge (Option c) where
     mrg Proxy mx my = my <|> mx
 
-    frz Proxy (Just mx) = Just <$> frz (Proxy :: Proxy c) mx
-    frz Proxy Nothing   = Right Nothing
+    frz Proxy path (Just mx) =  Just <$> frz (Proxy :: Proxy c) path mx
+    frz Proxy _ Nothing = Right Nothing
 
     thw Proxy (Just mx) = Just $ thw (Proxy :: Proxy c) mx
     thw Proxy Nothing   = Nothing
 
 instance Merge (Type c) where
     mrg Proxy _ y = y
-    frz Proxy x = Right x
+    frz Proxy _ x = Right x
     thw Proxy x = x
 
 
