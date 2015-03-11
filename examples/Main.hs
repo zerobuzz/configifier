@@ -62,14 +62,14 @@ test = putStrLn $ ppShow (renderConfigFile ex0, toJSON ex1, toJSON ex2, toJSON e
 type Cfg = ToConfigCode Cfg'
 
 type Cfg' =
-     "frontend" :> ServerCfg :>: "descr"
-  :| "backend" :> ServerCfg
+     "frontend"      :> ServerCfg :>: "descr"
+  :| "backend"       :> ServerCfg
   :| "default_users" :> [UserCfg] :>: "list of users that are created on start if database is empty"
 
 type ServerCfg =
      "bind_port"   :> Int
   :| "bind_host"   :> ST
-  :| "expose_host" :> Maybe ST
+  :| Maybe ("expose_host" :> ST)  -- FIXME: introduce (:?) operator for (:|)-then-Maybe?
 
 type UserCfg =
      "name"     :> ST :>: "user name (must be unique)"
@@ -79,8 +79,8 @@ type UserCfg =
 
 defaultCfg :: Tagged (NoDesc Cfg) (ToConfig (NoDesc Cfg) Identity)
 defaultCfg = Tagged $
-     Identity (Identity 8001 :| Identity "localhost" :| Identity (Just "expose"))
-  :| Identity (Identity 8002 :| Identity "localhost" :| Identity Nothing)
+     Identity (Identity 8001 :| Identity "localhost" :| Just (Identity "expose"))
+  :| Identity (Identity 8002 :| Identity "localhost" :| Nothing)
   :| Identity [u1, u2]
   where
     u1 = Identity "ralf" :| Identity "ralf@localhost" :| Identity "gandalf"

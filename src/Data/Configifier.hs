@@ -76,10 +76,7 @@ data ConfigCode k =
     | Label  Symbol (ConfigCode k)
     | Descr  (ConfigCode k) Symbol
     | List   (ConfigCode k)
-    | Option (ConfigCode k)  -- FIXME: missing optional args trigger
-                             -- 'IncompleteFreeze' errors.  i probably
-                             -- should inject one more 'Just'
-                             -- somewhere in the 'frz' for 'Option'?
+    | Option (ConfigCode k)
     | Type   k
 
 infixr 6 `Choice`
@@ -558,10 +555,12 @@ docs proxy = renderDoc (Proxy :: Proxy ConfigFile)  (toDoc proxy)
 
 
 data Doc =
-    DocDict [(String, Maybe String, Doc)]
+    DocDict [(String, Maybe String, Doc, DocOptional)]
   | DocList Doc
-  | DocOption Doc
   | DocType String
+  deriving (Eq, Ord, Show, Read, Typeable)
+
+data DocOptional = DocMandatory | DocOptional
   deriving (Eq, Ord, Show, Read, Typeable)
 
 concatDoc :: Doc -> Doc -> Doc
@@ -579,6 +578,7 @@ instance (KnownSymbol path, HasToDoc a) => HasToDoc (Label path a) where
         [( symbolVal (Proxy :: Proxy path)
          , Nothing
          , toDoc (Proxy :: Proxy a)
+         , DocMandatory
          )]
 
 instance (HasToDoc a, KnownSymbol path, KnownSymbol descr)
@@ -587,13 +587,16 @@ instance (HasToDoc a, KnownSymbol path, KnownSymbol descr)
         [( symbolVal (Proxy :: Proxy path)
          , Just $ symbolVal (Proxy :: Proxy descr)
          , toDoc (Proxy :: Proxy a)
+         , DocMandatory
          )]
 
 instance (HasToDoc a) => HasToDoc (List a) where
     toDoc Proxy = DocList $ toDoc (Proxy :: Proxy a)
 
 instance (HasToDoc a) => HasToDoc (Option a) where
-    toDoc Proxy = DocOption $ toDoc (Proxy :: Proxy a)
+    toDoc Proxy = case toDoc (Proxy :: Proxy a) of
+        DocDict xs -> DocDict $ (\ (p, d, t, _) -> (p, d, t, DocOptional)) <$> xs
+        bad -> error $ "HasToDoc Option: " ++ show bad
 
 instance (Typeable a) => HasToDoc (Type a) where
     toDoc Proxy = DocType . show $ typeOf (undefined :: a)
@@ -615,12 +618,14 @@ instance HasRenderDoc ConfigFile where
         f :: Doc -> [String]
         f (DocDict xs)   = concat $ map g xs
         f (DocList x)    = indent "- " $ f x
-        f (DocOption x)  = indent "[optional] " $ f x
         f (DocType base) = [base]
 
-        g :: (String, Maybe String, Doc) -> [String]
-        g (key, Just mDescr, subdoc) = ("# " <> mDescr) : (key <> ":") : indent "  " (f subdoc)
-        g (key, Nothing,     subdoc) =                    (key <> ":") : indent "  " (f subdoc)
+        g :: (String, Maybe String, Doc, DocOptional) -> [String]
+        g (key, mDescr, subdoc, optional) =
+            maybe [] (\ descr -> ["# " <> descr]) mDescr ++
+            [ "# [optional]" | case optional of DocMandatory -> False; DocOptional -> True ] ++
+            (key <> ":") : indent "  " (f subdoc) ++
+            [""]
 
         indent :: String -> [String] -> [String]
         indent start = lines . (start <>) . intercalate "\n  "
@@ -638,7 +643,6 @@ instance HasRenderDoc ShellEnv where
         f :: [(String, Maybe String)] -> Doc -> [String]
         f acc (DocDict xs) = concat $ map (g acc) xs
         f acc (DocList x) = f acc x
-        f acc (DocOption x) = f acc x
         f (reverse -> acc) (DocType base) =
                 shellvar :
                 ("    type: " ++ base) :
@@ -654,8 +658,8 @@ instance HasRenderDoc ShellEnv where
             mkd (_,   Nothing)    = Nothing
             mkd (key, Just descr) = Just $ "        " ++ (toUpper <$> key) ++ ": " ++ descr
 
-        g :: [(String, Maybe String )] -> (String, Maybe String, Doc) -> [String]
-        g acc (key, descr, subdoc) = f ((key, descr) : acc) subdoc
+        g :: [(String, Maybe String)] -> (String, Maybe String, Doc, DocOptional) -> [String]
+        g acc (key, descr, subdoc, _) = f ((key, descr) : acc) subdoc
 
 instance HasRenderDoc CommandLine where
     renderDoc Proxy _ = cs . unlines $
