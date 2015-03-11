@@ -28,7 +28,7 @@ import Control.Applicative ((<$>), (<*>), (<|>))
 import Control.Exception (Exception, assert)
 import Control.Monad.Error.Class (catchError)
 import Control.Monad.Identity
-import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON)
+import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON, (.=))
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
@@ -156,15 +156,15 @@ configify :: forall cfg mval .
       ( mval ~ Tagged cfg (ToConfig cfg Maybe)
       , Merge cfg
       , FromJSON mval
---      , HasParseShellEnv cfg
+      , HasParseShellEnv cfg
 --      , HasParseCommandLine cfg
       ) => [Source] -> Result cfg
 configify [] = error "configify: no sources!"
 configify sources = sequence (get <$> sources) >>= merge
   where
     get :: Source -> Either Error mval
-    get (ConfigFileYaml sbs) = parseConfigFile sbs :: Either Error mval
---    get (ShellEnv env)       = parseShellEnv proxy env
+    get (ConfigFileYaml sbs) = parseConfigFile sbs
+    get (ShellEnv env)       = parseShellEnv env
 --    get (CommandLine args)   = parseCommandLine proxy args
 
 
@@ -206,7 +206,7 @@ instance ( t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t)
          )
         => ToJSON (Tagged (Label s cfg) t') where
     toJSON (Tagged Nothing) = object []
-    toJSON (Tagged (Just v)) = if val == Aeson.Null then object [] else object [key Aeson..= val]
+    toJSON (Tagged (Just v)) = if val == Aeson.Null then object [] else object [key .= val]
       where
         key = cs $ symbolVal (Proxy :: Proxy s)
         val = toJSON (Tagged v :: Tagged cfg t)
@@ -245,12 +245,12 @@ instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
          )
         => FromJSON (Tagged (Label s cfg) t') where
     parseJSON = Aeson.withObject "configifier object" $ \ m ->
-        let key = cs $ symbolVal (Proxy :: Proxy s)
-            parseJSON' :: Aeson.Value -> Aeson.Parser (Tagged cfg t) = Aeson.parseJSON
-            retag :: t' -> Tagged (Label s cfg) t' = Tagged
-        in case HashMap.lookup key m of
-            (Just json) -> retag . Just . fromTagged <$> parseJSON' json
-            Nothing     -> return $ retag Nothing
+          case HashMap.lookup key m of
+            (Just json) -> Tagged . Just . fromTagged <$> parseJSON' json
+            Nothing     -> return $ Tagged Nothing
+        where
+          key = cs $ symbolVal (Proxy :: Proxy s)
+          parseJSON' :: Aeson.Value -> Aeson.Parser (Tagged cfg t) = Aeson.parseJSON
 
 -- | @instance ParseJSON List@
 instance ( t ~ ToConfig cfg Maybe, FromJSON (Tagged cfg t)
@@ -278,91 +278,69 @@ instance (FromJSON a) => FromJSON (Tagged (Type a) a) where
 
 -- * shell env.
 
-{-
-
 type Env = [(String, String)]
 
-class HasParseShellEnv a where
-    parseShellEnv :: Proxy a -> Env -> Either Error Aeson.Value
+class HasParseShellEnv (cfg :: ConfigCode *) where
+    parseShellEnv :: Env -> Either Error (Tagged cfg (ToConfig cfg Maybe))
 
--- | The sub-object structure of the config file is represented by '_'
--- in the shell variable names.  (It is still ok to have '_' in your
--- config path names instead of caml case; this parser chops off
--- complete matching names, whether they contain '_' or not, and only
--- then worries about trailing '_'.)
-instance (KnownSymbol path, HasParseShellEnv v) => HasParseShellEnv (path :> v) where
-    parseShellEnv Proxy env = do
-        let key = symbolVal (Proxy :: Proxy path)
-            env' = catMaybes $ crop <$> env
+instance (HasParseShellEnv a, HasParseShellEnv b) => HasParseShellEnv (Choice a b) where
+    parseShellEnv env = do
+        Tagged x :: Tagged a (ToConfig a Maybe) <- parseShellEnv env
+        Tagged y :: Tagged b (ToConfig b Maybe) <- parseShellEnv env
+        return . Tagged $ x :| y
 
-            crop :: (String, String) -> Maybe (String, String)
-            crop (k, v) = case splitAt (length key) k of
-                (key', s@"")        | mk key == mk key' -> Just (s, v)
-                (key', '_':s@(_:_)) | mk key == mk key' -> Just (s, v)
-                _                                       -> Nothing
+-- | The paths into the recursive structure of the config file are
+-- concatenated to shell variable names with separating '_'.  (It is
+-- still ok to have '_' in your config path names.  This parser chops
+-- off complete matching names, whether they contain '_' or not, and
+-- only then worries about trailing '_'.)
+instance (KnownSymbol path, HasParseShellEnv a) => HasParseShellEnv (Label path a) where
+    parseShellEnv env = if null env'
+          then Left $ ShellEnvSegmentNotFound key
+          else do
+              Tagged a :: Tagged a (ToConfig a Maybe) <- parseShellEnv env'
+              return $ Tagged (Just a)
+      where
+        key = symbolVal (Proxy :: Proxy path)
+        env' = catMaybes $ crop <$> env
 
-        if null env'
-            then Left $ ShellEnvSegmentNotFound key
-            else do
-                val :: Aeson.Value <- parseShellEnv (Proxy :: Proxy v) env'
-                return $ object [cs key Aeson..= val]
+        crop :: (String, String) -> Maybe (String, String)
+        crop (k, v) = case splitAt (length key) k of
+            (key', s@"")        | mk key == mk key' -> Just (s, v)
+            (key', '_':s@(_:_)) | mk key == mk key' -> Just (s, v)
+            _                                       -> Nothing
 
-instance (KnownSymbol path, HasParseShellEnv v, HasParseShellEnv o)
-        => HasParseShellEnv (path :> v :| o) where
-    parseShellEnv Proxy env = merge <$> sequence
-             [ parseShellEnv (Proxy :: Proxy (path :> v)) env
-             , parseShellEnv (Proxy :: Proxy o)           env
-             ]
+-- | You can provide a list value via the shell environment by
+-- providing a single element.  This element will be put into a list
+-- implicitly.
+--
+-- (A more general approach that allows for yaml-encoded list values
+-- in shell variables is more tricky to design, implement, and use: If
+-- you have a list of sub-configs and don't want the entire sub-config
+-- to be yaml-encoded, but use a longer shell variable name to go
+-- further down to deeper sub-configs, there is a lot of ambiguity.
+-- It may be possible to resolve that at run-time, but it's more
+-- tricky.)
+instance (HasParseShellEnv a) => HasParseShellEnv (List a) where
+    parseShellEnv env = do
+        Tagged a :: Tagged a (ToConfig a Maybe) <- parseShellEnv env
+        return $ Tagged [a]
 
-instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v)
-        => HasParseShellEnv (path :> v :>: descr) where
-    parseShellEnv Proxy = parseShellEnv (Proxy :: Proxy (path :> v))
+instance HasParseShellEnv a => HasParseShellEnv (Option a) where
+    parseShellEnv env = do
+        Tagged a :: Tagged a (ToConfig a Maybe) <- parseShellEnv env
+        return $ Tagged (Just a)
 
-instance (KnownSymbol path, KnownSymbol descr, HasParseShellEnv v, HasParseShellEnv o)
-        => HasParseShellEnv (path :> v :>: descr :| o) where
-    parseShellEnv Proxy = parseShellEnv (Proxy :: Proxy (path :> v :| o))
-
-instance (Typeable a, ToJSON a, FromJSON a) => HasParseShellEnv (Basic a) where
-    parseShellEnv Proxy = parseYamlToShellEnv (Proxy :: Proxy a)
-
-instance HasParseShellEnv Int where
-    parseShellEnv = parseYamlToShellEnv
-
-instance HasParseShellEnv Bool where
-    parseShellEnv = parseYamlToShellEnv
-
--- | (String values should not need to be quoted, so they are not
--- handled by 'Yaml.decode'.)
-instance HasParseShellEnv ST where
-    parseShellEnv Proxy [("", s)] = Right . Aeson.String $ cs s
-
--- | Pairs are treated as 'Basic' implicitly (without being
--- newtype-wrapped).
-instance (Typeable a, ToJSON a, FromJSON a, Typeable b, ToJSON b, FromJSON b)
-        => HasParseShellEnv (a, b) where
-    parseShellEnv = parseYamlToShellEnv
-
--- | 'Maybe' values translate to either 'Aeson.Null' or the plain
--- value (no 'Just' constructor).
-instance (Typeable a, FromJSON a, ToJSON a, HasParseShellEnv a)
-        => HasParseShellEnv (Maybe a) where
-    parseShellEnv = parseYamlToShellEnv
-
--- | Lists are treated as 'Basic' implicitly (without being
--- newtype-wrapped).
-instance HasParseShellEnv a
-        => HasParseShellEnv [a] where
-    parseShellEnv Proxy = fmap (Aeson.Array . Vector.singleton) . parseShellEnv (Proxy :: Proxy a)
-
-
-parseYamlToShellEnv :: forall a . (Typeable a, FromJSON a, ToJSON a)
-        => Proxy a -> Env -> Either Error Aeson.Value
-parseYamlToShellEnv Proxy [("", s)] = case Yaml.decodeEither $ cs s :: Either String a of
-    Right a -> Right $ Aeson.toJSON a
-    Left e  -> Left $ ShellEnvNoParse (show $ typeOf (undefined :: a), s, e)
+instance (Typeable a, FromJSON (Tagged (Type a) a)) => HasParseShellEnv (Type a) where
+    parseShellEnv [("", s)] = mapLeft renderError (Yaml.decodeEither (cs s) :: Either String (Tagged (Type a) a))
+      where
+        renderError :: String -> Error
+        renderError e = ShellEnvNoParse (show $ typeOf (undefined :: a), s, e)
 
 
 -- * cli
+
+{-
 
 type Args = [String]
 
@@ -401,8 +379,12 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
     [_, k] -> Right [(cs k, cs v)]
     bad -> Left $ "could not parse long-arg with value: " ++ show (s, v, bad)
 
+-}
+
 
 -- * accessing config values
+
+{-
 
 -- ** data types
 
@@ -483,6 +465,10 @@ type ValE (a :: *) (p :: [Symbol]) = ToExc (LookupFailed a p) (Val a p)
 type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
   ToExc a Nothing  = Fail a
   ToExc a (Just x) = Done x
+
+
+@@ FIXME: check out recent changes to relevant gist.
+
 
 -}
 
