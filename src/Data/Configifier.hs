@@ -6,6 +6,7 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
+{-# LANGUAGE InstanceSigs          #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverlappingInstances  #-}
 {-# LANGUAGE OverloadedStrings     #-}
@@ -531,11 +532,44 @@ instance (Merge c) => Merge (List c) where
     frz Proxy path xs = sequence $ frz (Proxy :: Proxy c) path <$> xs
     thw Proxy xs = thw (Proxy :: Proxy c) <$> xs
 
-instance (Merge c) => Merge (Option c) where
+-- | FIXME: if an optional sub-config is provided incompletely, the
+-- 'FreezeIncomplete' error will be dropped and the entire sub-config
+-- is cleared.  we may want to distinguish between the cases
+-- `sub-config missing` and `sub-config provided incompletely`
+-- instead.
+instance ( ToConfig ('Option c) Maybe ~ Maybe tm
+         , ToConfig ('Option c) Identity ~ Maybe ti
+         , tm ~ ToConfig c Maybe
+         , ti ~ ToConfig c Identity
+         , Merge c
+         ) => Merge (Option c) where
     mrg Proxy mx my = my <|> mx
 
-    frz Proxy path (Just mx) =  Just <$> frz (Proxy :: Proxy c) path mx
-    frz Proxy _ Nothing = Right Nothing
+    frz :: Proxy ('Option c)
+        -> [String]
+        -> ToConfig ('Option c) Maybe  -- (if i replace this with @Maybe tm@, ghc 7.8.4 gives up.)
+        -> Either Error (ToConfig ('Option c) Identity)
+    frz Proxy path (Just (mx :: tm)) = Just <$> frz (Proxy :: Proxy c) path mx
+    frz Proxy path Nothing           = Right Nothing
+
+
+{-
+
+FIXME: 'Option' does not work yet if something is legitimately
+missing.
+
+-- traceShow ("***", path, mx, frz (Proxy :: Proxy c) path mx) $
+
+("***",["frontend"],Just "localhost",Right (Identity "localhost"))
+("***",["backend"],Nothing,Left (FreezeIncomplete ["expose_host","backend"]))
+("***",[],Just (Just 8002 :| (Just "localhost" :| Just Nothing)),Left (FreezeIncomplete ["expose_host","backend"]))
+("***",["backend"],Nothing,Left (FreezeIncomplete ["expose_host","backend"]))
+
+- why does ["backend"] occur twice?
+- more importantly, why doesn't it freeze successfully?
+
+-}
+
 
     thw Proxy (Just mx) = Just $ thw (Proxy :: Proxy c) mx
     thw Proxy Nothing   = Nothing
