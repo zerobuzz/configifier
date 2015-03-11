@@ -33,7 +33,7 @@ import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
 import Data.Function (on)
-import Data.List (nubBy, intercalate, sort)
+import Data.List (nubBy, intercalate)
 import Data.Maybe (catMaybes)
 import Data.String.Conversions (ST, SBS, cs, (<>))
 import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
@@ -565,7 +565,7 @@ data Doc =
   deriving (Eq, Ord, Show, Read, Typeable)
 
 concatDoc :: Doc -> Doc -> Doc
-concatDoc (DocDict xs) (DocDict ys) = DocDict . sort $ xs ++ ys
+concatDoc (DocDict xs) (DocDict ys) = DocDict $ xs ++ ys
 concatDoc bad bad' = error $ "concatDoc: " ++ show (bad, bad')
 
 class HasToDoc (a :: ConfigCode *) where
