@@ -537,11 +537,11 @@ instance (Merge c) => Merge (List c) where
     frz Proxy path xs = sequence $ frz (Proxy :: Proxy c) path <$> xs
     thw Proxy xs = thw (Proxy :: Proxy c) <$> xs
 
--- | FIXME: if an optional sub-config is provided incompletely, the
--- 'FreezeIncomplete' error will be dropped and the entire sub-config
--- is cleared.  we may want to distinguish between the cases
--- `sub-config missing` and `sub-config provided incompletely`
--- instead.
+-- | FIXME: if a non-optional part of an optional sub-config is
+-- missing, the 'FreezeIncomplete' error is ignored and the entire
+-- sub-config is cleared.  it would be better to distinguish between
+-- the cases `sub-config missing` and `sub-config provided
+-- incompletely`, and still raise an error in the latter.
 instance ( ToConfig ('Option c) Maybe ~ Maybe tm
          , ToConfig ('Option c) Identity ~ Maybe ti
          , tm ~ ToConfig c Maybe
@@ -564,92 +564,6 @@ instance Merge (Type c) where
     mrg Proxy _ y = y
     frz Proxy _ x = Right x
     thw Proxy x = x
-
-
-{-
-
--- test 1
-
-type X1 = ToConfigCode (Maybe ("a" :> Int))
-type X2 = Option (Label "a" (Type Int))
-
-x1 :: (X1 ~ X2) => ToConfig X2 Maybe
-x1 = Just (Just 3)
-
-x2 = freeze (Tagged x1 :: Tagged X1 (ToConfig X1 Maybe))
-
-x3 :: (X1 ~ X2) => ToConfig X2 Maybe
-x3 = Nothing
-
-x4 = freeze (Tagged x3 :: Tagged X1 (ToConfig X1 Maybe))
-
-
--- test 2
-
-type X1 = ToConfigCode (Maybe ("a" :> Int))
-type X2 = Option (Label "a" (Type Int))
-
-x1 :: (X1 ~ X2) => ToConfig X2 Maybe
-x1 = Just (Just 3)
-
-x2 = freeze (Tagged x1 :: Tagged X1 (ToConfig X1 Maybe))
-
-x3 :: (X1 ~ X2) => ToConfig X2 Maybe
-x3 = Nothing
-
-x4 = freeze (Tagged x3 :: Tagged X1 (ToConfig X1 Maybe))
-
-
--- test 3
-
-type Cfg = ToConfigCode Cfg'
-
-type Cfg' =
-            "frontend"      :> ServerCfg
-  :| Maybe ("backend"       :> ServerCfg)
-
-type ServerCfg =
-            "bind_port"   :> Int
-  :| Maybe ("expose_host" :> ST)
-
-x1 :: ToConfig Cfg Maybe
-x1 = Just (Just 3 :| Just (Just "host")) :| Just (Just (Just 4 :| Just (Just "hist")))
-
-x2 = freeze (Tagged x1 :: Tagged Cfg (ToConfig Cfg Maybe))
-
-x3 :: ToConfig Cfg Maybe
-x3 = Just (Just 3 :| Just (Just "host")) :| Nothing
-
-x4 :: Tagged Cfg (ToConfig Cfg Identity)
-x4 = case freeze (Tagged x3 :: Tagged Cfg (ToConfig Cfg Maybe)) of
-    Right x -> x
-
-x5 = SBS.putStr . (<> "\n") $ renderConfigFile x4
-
-x6 = (parseConfigFile :: SBS -> Either Error (Tagged Cfg (ToConfig Cfg Maybe))) $ renderConfigFile x4
-
--}
-
-
-
-{-
-
-FIXME: 'Option' does not work yet if something is legitimately
-missing.
-
--- traceShow ("***", path, mx, frz (Proxy :: Proxy c) path mx) $
-
-("***",["frontend"],Just "localhost",Right (Identity "localhost"))
-("***",["backend"],Nothing,Left (FreezeIncomplete ["expose_host","backend"]))
-("***",[],Just (Just 8002 :| (Just "localhost" :| Just Nothing)),Left (FreezeIncomplete ["expose_host","backend"]))
-("***",["backend"],Nothing,Left (FreezeIncomplete ["expose_host","backend"]))
-
-- why does ["backend"] occur twice?
-- more importantly, why doesn't it freeze successfully?
-
--}
-
-
 
 
 -- * docs.
