@@ -405,7 +405,7 @@ type family Val (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
     Val (Choice a b) (p ': ps) = OrElse (Val a (p ': ps)) (Val b (p ': ps))
     Val (Label p a)  (p ': ps) = Val a ps
     Val (List a)     (p ': ps) = Val a (p ': ps)
-    Val (Option a)   (p ': ps) = Val a (p ': ps)
+    Val (Option a)   (p ': ps) = ToMaybe (Val a (p ': ps))
     Val (Type a)     '[]       = Just a
     Val a            ps        = Nothing
 
@@ -425,7 +425,18 @@ combine :: CMaybe a -> CMaybe b -> CMaybe (OrElse a b)
 combine (CJust x) _ = CJust x
 combine CNothing  y = y
 
+type family ToMaybe (a :: Maybe *) :: Maybe * where
+    ToMaybe (Just x) = Just (Maybe x)
+    ToMaybe Nothing  = Nothing
 
+
+-- | We need the 'Val' constraint in some instances because
+-- overlapping instances and closed type families aren't fully
+-- compatible.  GHC won't be able to recognize that we've already
+-- excluded the other cases and not reduce 'Val' automatically.  But
+-- the constraint should always resolve, unless we've made a mistake,
+-- and the worst outcome if we did are extra type errors, not run-time
+-- errors.
 class Sel cfg ps v where
     sel :: Proxy cfg -> Proxy ps -> v -> CMaybe (Val cfg ps)
 
@@ -433,12 +444,13 @@ instance ( ToConfig a Identity ~ v
          , ToConfig b Identity ~ w
          , Sel a ps v
          , Sel b ps w
-         , Val (Choice a b) ps ~ OrElse (Val a ps) (Val b ps)  -- (probably redundant)
+         , Val (Choice a b) ps ~ OrElse (Val a ps) (Val b ps)
          ) => Sel (Choice a b) ps (v :| w) where
     sel Proxy ps (v :| w) = combine (sel (Proxy :: Proxy a) ps v) (sel (Proxy :: Proxy b) ps w)
 
 instance ( v ~ ToConfig (Label p cfg) Identity
          , Sel cfg ps v
+         , Val (Label p cfg) ps ~ Val cfg ps
          ) => Sel (Label p cfg) (p ': ps) v where
     sel Proxy Proxy v = sel (Proxy :: Proxy cfg) (Proxy :: Proxy ps) v
 
@@ -451,12 +463,6 @@ instance Sel (Option a) ps v where
 instance Sel (Type a) '[] a where
     sel Proxy Proxy x = CJust x
 
--- | We need the 'Val' constraint here because overlapping instances
--- and closed type families aren't fully compatible.  GHC won't be
--- able to recognize that we've already excluded the other cases and
--- not reduce 'Val' automatically.  But the constraint should always
--- resolve, unless we've made a mistake, and the worst outcome if we
--- did are extra type errors, not run-time errors.
 instance (Val cfg ps ~ Nothing) => Sel cfg ps v where
     sel _ _ _ = CNothing
 
