@@ -196,6 +196,7 @@ instance ( t1 ~ ToConfig cfg1 Maybe, ToJSON (Tagged cfg1 t1)
                                       , toJSON (Tagged o2 :: Tagged cfg2 t2)
                                       ) of
         (Object m1, Object m2) -> Object $ HashMap.union m2 m1
+        (v, Null)              -> v
         (_, v')                -> v'
 
 -- | @instance ToJSON Label@
@@ -217,7 +218,8 @@ instance (t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t))
 -- | @instance ToJSON Option@
 instance (t ~ ToConfig cfg Maybe, ToJSON (Tagged cfg t))
         => ToJSON (Tagged (Option cfg) (Maybe t)) where
-    toJSON (Tagged mv) = toJSON $ (Tagged :: t -> Tagged cfg t) <$> mv
+    toJSON (Tagged (Just v)) = toJSON $ (Tagged v :: Tagged cfg t)
+    toJSON (Tagged Nothing)  = Aeson.Null
 
 -- | @instance ToJSON Type@
 instance (ToJSON a) => ToJSON (Tagged (Type a) a) where
@@ -618,7 +620,13 @@ x2 = freeze (Tagged x1 :: Tagged Cfg (ToConfig Cfg Maybe))
 x3 :: ToConfig Cfg Maybe
 x3 = Just (Just 3 :| Just (Just "host")) :| Nothing
 
-x4 = freeze (Tagged x3 :: Tagged Cfg (ToConfig Cfg Maybe))
+x4 :: Tagged Cfg (ToConfig Cfg Identity)
+x4 = case freeze (Tagged x3 :: Tagged Cfg (ToConfig Cfg Maybe)) of
+    Right x -> x
+
+x5 = SBS.putStr . (<> "\n") $ renderConfigFile x4
+
+x6 = (parseConfigFile :: SBS -> Either Error (Tagged Cfg (ToConfig Cfg Maybe))) $ renderConfigFile x4
 
 -}
 
