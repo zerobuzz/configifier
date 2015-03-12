@@ -109,6 +109,13 @@ type family ToConfig (a :: ConfigCode *) (f :: * -> *) :: * where
     ToConfig (Option a)   f = Maybe (ToConfig a f)
     ToConfig (Type a)     f = a
 
+type family RunIdentity (a :: *) :: * where
+    RunIdentity (Identity x) = x
+    RunIdentity (a :| b)     = RunIdentity a :| RunIdentity b
+    RunIdentity [a]          = [RunIdentity a]
+    RunIdentity (Maybe a)    = Maybe (RunIdentity a)
+    RunIdentity x            = x
+
 
 -- * sources
 
@@ -386,15 +393,6 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
 
 -- ** exposed interface
 
-{-
--- | This is a wrapper around 'sel' that hides the interal use of
--- 'CMaybe'.  As we expect, this version will just cause a type error
--- if it is applied to an illegal path.
-(>.) :: forall cfg a p r . (Sel a p, ValE a p ~ Done r) => a -> Proxy p -> r
-(>.) cfg p = case sel cfg p of
-    CJust x  -> x
-    _        -> error "inaccessible"
--}
 
 
 -- ** more type-level programming...
@@ -404,8 +402,8 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
 type family Val (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
     Val (Choice a b) (p ': ps) = OrElse (Val a (p ': ps)) (Val b (p ': ps))
     Val (Label p a)  (p ': ps) = Val a ps
-    Val (List a)     (p ': ps) = Val a (p ': ps)
-    Val (Option a)   (p ': ps) = ToMaybe (Val a (p ': ps))
+    Val (List a)     ps        = ToRuntimeList (Val a ps)
+    Val (Option a)   ps        = ToRuntimeMaybe (Val a ps)
     Val (Type a)     '[]       = Just a
     Val a            ps        = Nothing
 
@@ -425,46 +423,115 @@ combine :: CMaybe a -> CMaybe b -> CMaybe (OrElse a b)
 combine (CJust x) _ = CJust x
 combine CNothing  y = y
 
-type family ToMaybe (a :: Maybe *) :: Maybe * where
-    ToMaybe (Just x) = Just (Maybe x)
-    ToMaybe Nothing  = Nothing
+type family ToRuntimeMaybe (a :: Maybe *) :: Maybe * where
+    ToRuntimeMaybe (Just x) = Just (Maybe x)
+    ToRuntimeMaybe Nothing  = Nothing
+
+type family ToRuntimeList (a :: Maybe *) :: Maybe * where
+    ToRuntimeList (Just x) = Just [x]
+    ToRuntimeList Nothing  = Nothing
 
 
--- | We need the 'Val' constraint in some instances because
--- overlapping instances and closed type families aren't fully
--- compatible.  GHC won't be able to recognize that we've already
--- excluded the other cases and not reduce 'Val' automatically.  But
--- the constraint should always resolve, unless we've made a mistake,
--- and the worst outcome if we did are extra type errors, not run-time
--- errors.
-class Sel cfg ps v where
+-- | Run 'Val' types on 'ToConfig' values.
+--
+-- We need the 'Val' constraint in some instances because overlapping
+-- instances and closed type families aren't fully compatible.  GHC
+-- won't be able to recognize that we've already excluded the other
+-- cases and not reduce 'Val' automatically.  But the constraint
+-- should always resolve, unless we've made a mistake, and the worst
+-- outcome if we did are extra type errors, not run-time errors.
+class (v ~ RunIdentity (ToConfig cfg Identity)) => Sel cfg ps v where
     sel :: Proxy cfg -> Proxy ps -> v -> CMaybe (Val cfg ps)
 
-instance ( ToConfig a Identity ~ v
-         , ToConfig b Identity ~ w
+instance ( (v :| w) ~ ToConfig (Choice a b) Identity
+         , Val (Choice a b) ps ~ OrElse (Val a ps) (Val b ps)
+         , v ~ ToConfig a Identity
+         , w ~ ToConfig b Identity
          , Sel a ps v
          , Sel b ps w
-         , Val (Choice a b) ps ~ OrElse (Val a ps) (Val b ps)
          ) => Sel (Choice a b) ps (v :| w) where
     sel Proxy ps (v :| w) = combine (sel (Proxy :: Proxy a) ps v) (sel (Proxy :: Proxy b) ps w)
 
-instance ( v ~ ToConfig (Label p cfg) Identity
+instance ( v ~ RunIdentity (ToConfig (Label p cfg) Identity)
+         , Val (Label p cfg) (p ': ps) ~ Val cfg ps
          , Sel cfg ps v
-         , Val (Label p cfg) ps ~ Val cfg ps
          ) => Sel (Label p cfg) (p ': ps) v where
     sel Proxy Proxy v = sel (Proxy :: Proxy cfg) (Proxy :: Proxy ps) v
 
-instance Sel (List a) '[] v where
-    sel Proxy Proxy v = error "Sel List"
 
-instance Sel (Option a) ps v where
-    sel Proxy Proxy v = error "Sel Option"
+instance (v ~ RunIdentity (ToConfig (List cfg) Identity)) => Sel (List cfg) ps v where
+    sel = error "instance Sel List"
 
-instance Sel (Type a) '[] a where
+{-
+-- | this just gives you a list of config objects.  (FUTURE WORK: it
+-- would be nice to be able to descent further into this list inside
+-- the same path list.)
+instance ( v ~ ToConfig (List cfg) Identity
+         , v ~ [w]
+
+         , Val (List cfg) '[] ~ ToRuntimeList (Val cfg '[])
+         , ToRuntimeList (Val cfg '[]) ~ Just x
+         , Just x ~ Val cfg '[]
+
+         ) => Sel (List cfg) '[] v where
+    sel Proxy Proxy x = CJust x
+-}
+
+
+instance (v ~ RunIdentity (ToConfig (Option cfg) Identity)) => Sel (Option cfg) ps v where
+    sel = error "instance Sel Option"
+
+{-
+instance ( (Maybe v) ~ ToConfig (Option cfg) Identity
+         , Sel cfg ps v
+         , Val (Option cfg) ps ~ ToRuntimeMaybe (Val cfg ps)
+         ) => Sel (Option cfg) ps (Maybe v) where
+    sel Proxy Proxy _ = undefined
+
+--    sel Proxy Proxy (Just v) = Just <$> sel (Proxy :: Proxy a) (Proxy :: Proxy ps) v
+--    sel Proxy Proxy Nothing  = CJust Nothing
+-}
+
+
+instance (a ~ RunIdentity a) => Sel (Type a) '[] a where
     sel Proxy Proxy x = CJust x
 
-instance (Val cfg ps ~ Nothing) => Sel cfg ps v where
+instance ( v ~ RunIdentity (ToConfig cfg Identity)
+         , Val cfg ps ~ Nothing
+         ) => Sel cfg ps v where
     sel _ _ _ = CNothing
+
+
+-- tests (FIXME: move to hspecs module)
+
+type X1 = ToConfigCode ("a" :> Int)
+-- type X1 = ToConfigCode (Option ("a" :> Int))
+
+x1 :: Tagged X1 (ToConfig X1 Maybe)
+x1 = Tagged $ Just 3
+-- x1 = Tagged $ Just (Just 3)
+
+x2 :: Tagged X1 (ToConfig X1 Identity)
+Right x2 = freeze x1
+
+x3 :: ( Val X1 '["a"] ~ Just Int  -- this is just to test that ghc agrees with me.  nothing to do with x3's value.
+      , a ~ Int, a ~ RunIdentity a )  -- this is just out of desperation...
+    => a
+x3 = x2 .>> (Proxy :: Proxy '["a"])
+
+
+-- | This is a wrapper around 'sel' that hides the interal use of
+-- 'CMaybe'.  As we expect, this version will just cause a type error
+-- if it is applied to an illegal path.
+(.>>) :: forall cfg ps v r r'
+       . ( v ~ ToConfig cfg Identity
+         , Val cfg ps ~ Just r
+         , r ~ RunIdentity r
+         , Sel cfg ps v
+         ) => Tagged cfg v -> Proxy ps -> r
+(.>>) (Tagged v) path = case sel (Proxy :: Proxy cfg) path v of
+    CJust x  -> x
+    _        -> error "inaccessible"
 
 
 
