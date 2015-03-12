@@ -84,7 +84,7 @@ infixr 6 `Choice`
 
 
 -- | Map user-provided config type to 'ConfigCode' types.
-type family ToConfigCode (k :: *) :: ConfigCode * where
+type family ToConfigCode (a :: *) :: ConfigCode * where
     ToConfigCode (a :| b)  = Choice (ToConfigCode a) (ToConfigCode b)
     ToConfigCode (s :> a)  = Label s (ToConfigCode a)
     ToConfigCode (a :>: s) = Descr (ToConfigCode a) s
@@ -93,7 +93,7 @@ type family ToConfigCode (k :: *) :: ConfigCode * where
     ToConfigCode a         = Type a
 
 -- | Filter 'Descr' constructors from 'ConfigCode'.
-type family NoDesc (k :: ConfigCode *) :: ConfigCode * where
+type family NoDesc (a :: ConfigCode *) :: ConfigCode * where
     NoDesc (Choice a b) = Choice (NoDesc a) (NoDesc b)
     NoDesc (Label s a)  = Label s (NoDesc a)
     NoDesc (Descr a s)  = NoDesc a
@@ -102,7 +102,7 @@ type family NoDesc (k :: ConfigCode *) :: ConfigCode * where
     NoDesc (Type a)     = Type a
 
 -- | Map 'ConfgCode' types to the types of config values.
-type family ToConfig (k :: ConfigCode *) (f :: * -> *) :: * where
+type family ToConfig (a :: ConfigCode *) (f :: * -> *) :: * where
     ToConfig (Choice a b) f = ToConfig a f :| ToConfig b f
     ToConfig (Label s a)  f = f (ToConfig a f)
     ToConfig (List a)     f = [ToConfig a f]
@@ -395,13 +395,13 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
 -}
 
 
--- * more type-level programming...
+-- ** more type-level programming...
 
 -- | Type-level lookup of a path in a configuration type.
 -- A path is represented as a list of symbols.
-type family Val (k :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
+type family Val (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
     Val (Choice a b) (p ': ps) = OrElse (Val a (p ': ps)) (Val b (p ': ps))
-    Val (Label p a)  (p ': ps) = Identity (Val a ps)
+    Val (Label p a)  (p ': ps) = Val a ps
     Val (List a)     (p ': ps) = Val a (p ': ps)
     Val (Option a)   (p ': ps) = Val a (p ': ps)
     Val (Type a)     '[]       = Just a
@@ -427,39 +427,28 @@ combine CNothing  y = y
 class Sel cfg ps v where
     sel :: Proxy cfg -> Proxy ps -> v -> CMaybe (Val cfg ps)
 
-{-
-instance ( Val ('Choice cfg cfg') ps ~ OrElse (Val cfg ps) (Val cfg' ps)
-         ) => Sel (Choice cfg cfg') (v1 :| v2) ps where
-    sel Proxy ps (x :| y) = combine _ _ :: CMaybe (Val ('Choice cfg cfg') ps)
-      where
-        x' = sel (Proxy :: Proxy cfg) ps x
-        y' = sel (Proxy :: Proxy cfg') ps y
--}
-
+instance ( ToConfig a Identity ~ v
+         , ToConfig b Identity ~ w
+         , Sel a ps v
+         , Sel b ps w
+         , Val (Choice a b) ps ~ OrElse (Val a ps) (Val b ps)  -- (probably redundant)
+         ) => Sel (Choice a b) ps (v :| w) where
+    sel Proxy ps (v :| w) = combine (sel (Proxy :: Proxy a) ps v) (sel (Proxy :: Proxy b) ps w)
 
 instance ( v ~ ToConfig (Label p cfg) Identity
-         , Sel cfg ps (Val cfg ps)
+         , Sel cfg ps v
          ) => Sel (Label p cfg) (p ': ps) v where
-    sel Proxy Proxy v = case sel (Proxy :: Proxy cfg) (Proxy :: Proxy ps) v of
-        x -> _
+    sel Proxy Proxy v = sel (Proxy :: Proxy cfg) (Proxy :: Proxy ps) v
 
---     Could not deduce (Sel cfg ps (Identity (ToConfig cfg Identity)))
---       arising from a use of ‘sel’
-
-
-instance Sel (List a) ps v where
-    sel = _
+instance Sel (List a) '[] v where
+    sel Proxy Proxy v = error "Sel List"
 
 instance Sel (Option a) ps v where
-    sel = _
-
-
+    sel Proxy Proxy v = error "Sel Option"
 
 instance Sel (Type a) '[] a where
     sel Proxy Proxy x = CJust x
 
-
-{-
 -- | We need the 'Val' constraint here because overlapping instances
 -- and closed type families aren't fully compatible.  GHC won't be
 -- able to recognize that we've already excluded the other cases and
@@ -468,7 +457,6 @@ instance Sel (Type a) '[] a where
 -- did are extra type errors, not run-time errors.
 instance (Val cfg ps ~ Nothing) => Sel cfg ps v where
     sel _ _ _ = CNothing
--}
 
 
 
@@ -567,6 +555,74 @@ instance ( ToConfig ('Option c) Maybe ~ Maybe tm
     frz Proxy path (Just (mx :: tm)) = Just <$> frz (Proxy :: Proxy c) path mx
     frz Proxy path Nothing           = Right Nothing
 
+    thw Proxy (Just mx) = Just $ thw (Proxy :: Proxy c) mx
+    thw Proxy Nothing   = Nothing
+
+instance Merge (Type c) where
+    mrg Proxy _ y = y
+    frz Proxy _ x = Right x
+    thw Proxy x = x
+
+
+{-
+
+-- test 1
+
+type X1 = ToConfigCode (Maybe ("a" :> Int))
+type X2 = Option (Label "a" (Type Int))
+
+x1 :: (X1 ~ X2) => ToConfig X2 Maybe
+x1 = Just (Just 3)
+
+x2 = freeze (Tagged x1 :: Tagged X1 (ToConfig X1 Maybe))
+
+x3 :: (X1 ~ X2) => ToConfig X2 Maybe
+x3 = Nothing
+
+x4 = freeze (Tagged x3 :: Tagged X1 (ToConfig X1 Maybe))
+
+
+-- test 2
+
+type X1 = ToConfigCode (Maybe ("a" :> Int))
+type X2 = Option (Label "a" (Type Int))
+
+x1 :: (X1 ~ X2) => ToConfig X2 Maybe
+x1 = Just (Just 3)
+
+x2 = freeze (Tagged x1 :: Tagged X1 (ToConfig X1 Maybe))
+
+x3 :: (X1 ~ X2) => ToConfig X2 Maybe
+x3 = Nothing
+
+x4 = freeze (Tagged x3 :: Tagged X1 (ToConfig X1 Maybe))
+
+
+-- test 3
+
+type Cfg = ToConfigCode Cfg'
+
+type Cfg' =
+            "frontend"      :> ServerCfg
+  :| Maybe ("backend"       :> ServerCfg)
+
+type ServerCfg =
+            "bind_port"   :> Int
+  :| Maybe ("expose_host" :> ST)
+
+x1 :: ToConfig Cfg Maybe
+x1 = Just (Just 3 :| Just (Just "host")) :| Just (Just (Just 4 :| Just (Just "hist")))
+
+x2 = freeze (Tagged x1 :: Tagged Cfg (ToConfig Cfg Maybe))
+
+x3 :: ToConfig Cfg Maybe
+x3 = Just (Just 3 :| Just (Just "host")) :| Nothing
+
+x4 = freeze (Tagged x3 :: Tagged Cfg (ToConfig Cfg Maybe))
+
+-}
+
+
 
 {-
 
@@ -586,13 +642,6 @@ missing.
 -}
 
 
-    thw Proxy (Just mx) = Just $ thw (Proxy :: Proxy c) mx
-    thw Proxy Nothing   = Nothing
-
-instance Merge (Type c) where
-    mrg Proxy _ y = y
-    frz Proxy _ x = Right x
-    thw Proxy x = x
 
 
 -- * docs.

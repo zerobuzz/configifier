@@ -54,12 +54,25 @@ ex4 :: ( ToConfig (NoDesc (ToConfigCode ("bla" :> Int :>: "dwfw"))) Maybe ~
        ) => Tagged cfg t
 ex4 = Tagged $ Just 3
 
+
+
+{-
+ex5 :: forall cfg .
+       ( cfg ~ ToConfigCode ("a" :> Int)
+       ) => CMaybe (Val ('Label "a" ('Type Int)) '[])
+ex5 = sel (Proxy :: Proxy cfg) (Proxy :: Proxy '["a"]) (Identity (3 :: Int))
+-}
+
+
+
 test = putStrLn $ ppShow (renderConfigFile ex0, toJSON ex1, toJSON ex2, toJSON ex3, toJSON ex4)
+
 
 
 -- * an interesting example
 
-type Cfg = ToConfigCode Cfg'
+type Cfg = NoDesc CfgDesc
+type CfgDesc = ToConfigCode Cfg'
 
 type Cfg' =
             "frontend"      :> ServerCfg :>: "descr"
@@ -69,7 +82,7 @@ type Cfg' =
 type ServerCfg =
             "bind_port"   :> Int
   :|        "bind_host"   :> ST
-  :| Maybe ("expose_host" :> ST)  -- FIXME: introduce (:?) operator for (:|)-then-Maybe?
+  :| Maybe ("expose_host" :> ST)
 
 type UserCfg =
             "name"     :> ST :>: "user name (must be unique)"
@@ -77,7 +90,7 @@ type UserCfg =
   :|        "password" :> ST :>: "password (not encrypted)"
 
 
-defaultCfg :: Tagged (NoDesc Cfg) (ToConfig (NoDesc Cfg) Identity)
+defaultCfg :: Tagged Cfg (ToConfig Cfg Identity)
 defaultCfg = Tagged $
      Identity (Identity 8001 :| Identity "localhost" :| Just (Identity "expose"))
   :| Just (Identity (Identity 8002 :| Identity "localhost" :| Nothing))
@@ -97,7 +110,7 @@ main = do
 
     -- putStrLn $ ppShow sources
 
-    ST.putStrLn $ docs (Proxy :: Proxy Cfg)
+    ST.putStrLn $ docs (Proxy :: Proxy CfgDesc)
 
     let dump cfg = do
             putStrLn $ ppShow cfg
@@ -105,10 +118,12 @@ main = do
 
     dump defaultCfg
 
-    case configify sources :: Result (NoDesc Cfg) of
+    case configify sources :: Result Cfg of
         Left e -> print e
-        Right cfg -> dump cfg
+        Right cfg -> do
+            dump cfg
 
+--            print $ (sel (Proxy :: Proxy Cfg) (Proxy :: Proxy '["frontend"]) cfg)
 
 {-
             putStrLn "accessing config values:"
