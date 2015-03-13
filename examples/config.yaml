@@ -1,0 +1,14 @@
+backend:
+  bind_host: localhost
+  bind_port: 8002
+frontend:
+  expose_host: fost
+  bind_host: localhost
+  bind_port: 8001
+default_users:
+- email: ralf@localhost
+  name: ralf
+  password: gandalf
+- email: claudi@remotehost
+  name: claudi
+  password: also_gandalf
