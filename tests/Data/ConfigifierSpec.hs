@@ -183,6 +183,20 @@ misc = do
                 cfg3 :: Tagged c = Tagged $ NothingO
          in t
 
+    it "(\"l\" :> Int :- \"l'\" :> Int)" $
+        let t :: forall c . ( c ~ ToConfigCode ("l" :> Int :- "l'" :> Int)
+                            , ToVal c '["l"] ~ Just Int  -- (redundant)
+                            , ToConfig c Id ~ (Id Int :- Id Int)  -- (redundant)
+                            ) => IO ()
+            t = do
+                  cfg1 >>. (Proxy :: Proxy '["l"])  `shouldBe` 3
+                  cfg1 >>. (Proxy :: Proxy '["l'"]) `shouldBe` 0
+                  cfg2 >>. (Proxy :: Proxy '["l'"]) `shouldBe` 0
+              where
+                cfg1 :: Tagged c = Tagged $ Id 3 :- Id (0 :: Int)
+                cfg2 :: Tagged c = Tagged $ Id 4 :- Id (0 :: Int)
+         in t
+
     it "(\"l\" :> Int :- Maybe (\"l'\" :> Int))" $
         let t :: forall c . ( c ~ ToConfigCode ("l" :> Int :- Maybe ("l'" :> Int))
                             , ToVal c '["l"] ~ Just Int  -- (redundant)
