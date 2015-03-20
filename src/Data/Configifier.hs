@@ -19,7 +19,6 @@
 {-# LANGUAGE ViewPatterns          #-}
 
 {-# LANGUAGE UndecidableInstances  #-}  -- is there a way to remove this?
-{-# LANGUAGE IncoherentInstances   #-}
 
 {-# OPTIONS  #-}
 
@@ -415,6 +414,15 @@ toValueMaybe :: CMaybe a -> CMaybe (ToValueMaybe a)
 toValueMaybe (CJust x) = CJust $ Just x
 toValueMaybe CNothing  = CNothing
 
+class NothingValue (a :: Maybe *) where
+  nothingValue :: Proxy a -> CMaybe (ToValueMaybe a)
+
+instance NothingValue Nothing where
+  nothingValue _ = CNothing
+
+instance NothingValue (Just x) where
+  nothingValue _ = CJust Nothing
+
 -- This is '<|>' on 'Maybe' lifted to the type level.
 type family OrElse (x :: Maybe k) (y :: Maybe k) :: Maybe k where
     OrElse (Just x) y = Just x
@@ -464,20 +472,27 @@ instance ( cfg ~ Label p cfg'
     sel' (Tagged (Id a)) Proxy = sel' (Tagged a :: Tagged cfg') (Proxy :: Proxy ps)
 
 instance ( cfg ~ Option cfg'
-         , ToVal cfg ps ~ Just (Maybe r)
+      --   , ToVal cfg ps ~ Just (Maybe r)
+         , NothingValue (ToVal cfg' ps)
          , Sel' cfg' ps
          ) => Sel' (Option cfg') ps where
-    sel' (Tagged (JustO a)) ps = toValueMaybe $ sel' (Tagged a :: Tagged cfg') ps
-    sel' (Tagged NothingO) _ = CJust Nothing
+    sel' (Tagged NothingO)  _  = nothingValue (Proxy :: Proxy (ToVal cfg' ps))
+    sel' (Tagged (JustO a)) ps = toValueMaybe $ sel' (Tagged a         :: Tagged cfg') ps
+
+instance Sel'' cfg ps => Sel' cfg ps where
+    sel' = sel''
+
+class Sel'' cfg ps where
+    sel'' :: Tagged cfg -> Proxy ps -> CMaybe (ToVal cfg ps)
 
 instance ( t ~ ToConfig cfg Id
          , ToVal cfg '[] ~ Just t
-         ) => Sel' cfg '[] where
-    sel' (Tagged a) Proxy = CJust a
+         ) => Sel'' cfg '[] where
+    sel'' (Tagged a) Proxy = CJust a
 
-instance ( ToVal cfg ps ~ Nothing
-         ) => Sel' cfg ps where
-    sel' _ _ = CNothing
+instance ( ToVal cfg (p ': ps) ~ Nothing
+         ) => Sel'' cfg (p ': ps) where
+    sel'' _ _ = CNothing
 
 
 -- *** static lookup error handling
