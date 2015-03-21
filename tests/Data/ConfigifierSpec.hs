@@ -9,11 +9,10 @@
 module Data.ConfigifierSpec
 where
 
-import Control.Applicative
+import Data.Dynamic
+import Data.Either
 import Data.Maybe
 import Data.Monoid
-import Data.Either
-import Data.Dynamic
 import Data.String.Conversions
 import Prelude
 import Test.Hspec
@@ -207,34 +206,6 @@ misc = do
               where
                 cfg1 :: Tagged c = Tagged $ Id 3 :- JustO (Id (0 :: Int))
                 cfg2 :: Tagged c = Tagged $ Id 4 :- NothingO
-         in t
-
-  describe "select (dynamic)" $ do
-    it "(\"l\" :> Int)" $
-        let t :: forall c . (c ~ ToConfigCode ("l" :> Int)) => IO ()
-            t = fromDynamic <$> (cfg >. "l") `shouldBe` Right (Just (3 :: Int))
-              where
-                cfg :: Tagged c = Tagged $ Id 3
-         in t
-
-    it "(\"l\" :> (\"l'\" :> Bool))" $
-        let t :: forall c . (c ~ ToConfigCode ("l" :> ("l'" :> Bool))) => IO ()
-            t = do
-                  fromDynamic <$> (cfg >. "l") `shouldBe` Right (Just (Id False))
-                  fromDynamic <$> ((Tagged . fromJust . fromDynamic
-                                    . (\ (Right v) -> v) $ cfg >. "l" :: Tagged (ToConfigCode ("l'" :> Bool))) >. "l'")
-                      `shouldBe` Right (Just False)
-              where
-                cfg :: Tagged c = Tagged . Id . Id $ False
-         in t
-
-    it "(\"l\" :> Int :- \"l'\" :> Bool)" $
-        let t :: forall c . (c ~ ToConfigCode ("l" :> Int :- "l'" :> Bool)) => IO ()
-            t = do
-                  fromDynamic <$> (cfg >. "l") `shouldBe` Right (Just (0 :: Int))
-                  fromDynamic <$> (cfg >. "l'") `shouldBe` Right (Just False)
-              where
-                cfg :: Tagged c = Tagged $ Id 0 :- Id False
          in t
 
   mergeSpec

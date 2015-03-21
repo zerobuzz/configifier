@@ -434,8 +434,8 @@ orElse CNothing  y = y
 
 -- As we expect, this version will just cause a type error if it is
 -- applied to an illegal path.
-(>>.) :: forall cfg t ps r . (Sel' cfg ps, ToValE cfg ps ~ Done r) => Tagged cfg -> Proxy ps -> r
-(>>.) v p = case sel' v p of
+(>>.) :: forall cfg t ps r . (Sel cfg ps, ToValE cfg ps ~ Done r) => Tagged cfg -> Proxy ps -> r
+(>>.) v p = case sel v p of
     CJust x -> x
     _       -> error "inaccessible"
 
@@ -448,50 +448,50 @@ orElse CNothing  y = y
 -- cases and not reduce 'Val' automatically. But the constraints should
 -- always resolve, unless we've made a mistake, and the worst outcome
 -- if we did are extra type errors, not run-time errors.
-class Sel' cfg ps where
-    sel' :: Tagged cfg -> Proxy ps -> CMaybe (ToVal cfg ps)
+class Sel cfg ps where
+    sel :: Tagged cfg -> Proxy ps -> CMaybe (ToVal cfg ps)
 
 instance ( cfg ~ Record cfg' cfg''
          -- @ToVal cfg ps ~ Just t@ or @ToVal cfg ps ~ Nothing@
-         , Sel' cfg' ps
-         , Sel' cfg'' ps
-         ) => Sel' (Record cfg' cfg'') ps where
-    sel' (Tagged (a :- b)) ps = orElse (sel' (Tagged a :: Tagged cfg') ps) (sel' (Tagged b :: Tagged cfg'') ps)
+         , Sel cfg' ps
+         , Sel cfg'' ps
+         ) => Sel (Record cfg' cfg'') ps where
+    sel (Tagged (a :- b)) ps = orElse (sel (Tagged a :: Tagged cfg') ps) (sel (Tagged b :: Tagged cfg'') ps)
 
 instance ( cfg ~ Label p cfg'
          -- @ToVal cfg ps ~ Just t@ or @ToVal cfg ps ~ Nothing@
          , t ~ ToConfig cfg Id
-         , Sel' cfg' ps
+         , Sel cfg' ps
          , KnownSymbol p
-         ) => Sel' (Label p cfg') (p ': ps) where
-    sel' (Tagged (Id a)) Proxy = sel' (Tagged a :: Tagged cfg') (Proxy :: Proxy ps)
+         ) => Sel (Label p cfg') (p ': ps) where
+    sel (Tagged (Id a)) Proxy = sel (Tagged a :: Tagged cfg') (Proxy :: Proxy ps)
 
 instance ( cfg ~ Option cfg'
          , NothingValue (ToVal cfg' ps)
-         , Sel' cfg' ps
-         ) => Sel' (Option cfg') ps where
-    sel' (Tagged NothingO)  _  = nothingValue (Proxy :: Proxy (ToVal cfg' ps))
-    sel' (Tagged (JustO a)) ps = toValueMaybe $ sel' (Tagged a :: Tagged cfg') ps
+         , Sel cfg' ps
+         ) => Sel (Option cfg') ps where
+    sel (Tagged NothingO)  _  = nothingValue (Proxy :: Proxy (ToVal cfg' ps))
+    sel (Tagged (JustO a)) ps = toValueMaybe $ sel (Tagged a :: Tagged cfg') ps
 
-instance Sel'' cfg ps => Sel' cfg ps where
-    sel' = sel''
+instance Sel' cfg ps => Sel cfg ps where
+    sel = sel'
 
 -- | Helper class for disambiguating overlaps.  The trick is that the
--- 'Sel'' instance based on the 'Sel''' constraint is more general
+-- 'Sel' instance based on the 'Sel'' constraint is more general
 -- than all other instances, so @OverlappingInstances@ will ensure it
--- is matched last.  This way, no instance of 'Sel''' can wrongly
--- overlap with any instance of 'Sel''.
-class Sel'' cfg ps where
-    sel'' :: Tagged cfg -> Proxy ps -> CMaybe (ToVal cfg ps)
+-- is matched last.  This way, no instance of 'Sel'' can wrongly
+-- overlap with any instance of 'Sel'.
+class Sel' cfg ps where
+    sel' :: Tagged cfg -> Proxy ps -> CMaybe (ToVal cfg ps)
 
 instance ( t ~ ToConfig cfg Id
          , ToVal cfg '[] ~ Just t
-         ) => Sel'' cfg '[] where
-    sel'' (Tagged a) Proxy = CJust a
+         ) => Sel' cfg '[] where
+    sel' (Tagged a) Proxy = CJust a
 
 instance ( ToVal cfg (p ': ps) ~ Nothing
-         ) => Sel'' cfg (p ': ps) where
-    sel'' _ _ = CNothing
+         ) => Sel' cfg (p ': ps) where
+    sel' _ _ = CNothing
 
 
 -- *** static lookup error handling
@@ -505,50 +505,6 @@ data LookupFailed a p
 type family ToExc (a :: k) (x :: Maybe l) :: Exc k l where
   ToExc a Nothing  = Fail a
   ToExc a (Just x) = Done x
-
-
--- ** dynamically (bad idea, see test suite)
-
-data SelectError =
-    SelectUnknownLabel
-      { selectUnknownLabel :: String
-      }
-  deriving (Eq, Ord, Show, Typeable)
-
-class (a ~ ToConfig cfg Id, Show a) => Sel cfg a where
-  (>.) :: Tagged cfg -> String -> Either SelectError Dynamic
-
-instance ( cfg ~ Record cfg' cfg''
-         , a ~ ToConfig cfg Id
-         , Show a, Show a', Show a'', Typeable a', Typeable a''
-         , Sel cfg' a'
-         , Sel cfg'' a''
-         ) => Sel (Record cfg' cfg'') a where
-  (Tagged (v :- v')) >. path =
-        case ( (Tagged v :: Tagged cfg') >. path
-             , (Tagged v' :: Tagged cfg'') >. path
-             ) of
-            (Right x,                     _)  -> Right x
-            (Left (SelectUnknownLabel _), x') -> x'
-
-instance ( cfg ~ Label s cfg'
-         , a ~ ToConfig cfg Id
-         , b ~ ToConfig cfg' Id
-         , Show a, Typeable b
-         , KnownSymbol s
-         ) => Sel (Label s cfg') a where
-    (Tagged a@(Id v)) >. path = if symbolVal (Proxy :: Proxy s) == path
-        then Right $ toDyn v
-        else Left $ SelectUnknownLabel path
-
-instance ( cfg ~ Label s (Type b)
-         , a ~ ToConfig cfg Id
-         , Show a, Show b, Typeable b
-         , KnownSymbol s
-         ) => Sel (Label s (Type b)) a where
-    (Tagged a@(Id v)) >. path = if symbolVal (Proxy :: Proxy s) == path
-        then Right $ toDyn v
-        else Left $ SelectUnknownLabel path
 
 
 -- * merge configs
