@@ -29,10 +29,11 @@ tests = hspec spec
 
 spec :: Spec
 spec = describe "Configifier" $ do
-    misc
+    miscSpec
+    mergeSpec
 
-misc :: Spec
-misc = do
+miscSpec :: Spec
+miscSpec = do
   describe "misc" $ do
     it "simple" $
         let text :: SBS
@@ -207,8 +208,6 @@ misc = do
                 cfg1 :: Tagged c = Tagged $ Id 3 :- JustO (Id (0 :: Int))
                 cfg2 :: Tagged c = Tagged $ Id 4 :- NothingO
          in t
-
-  mergeSpec
 
 
 run :: forall cfg tm ti .

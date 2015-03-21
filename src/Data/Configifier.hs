@@ -391,7 +391,14 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
 
 -- * accessing config values
 
--- * statically
+-- | Map a 'Tagged' config value and a type-level path to the part of
+-- the config value the path points to.  Trigger an informative type
+-- error if path does not exist.
+(>>.) :: forall cfg t ps r . (Sel cfg ps, ToValE cfg ps ~ Done r) => Tagged cfg -> Proxy ps -> r
+(>>.) v p = case sel v p of
+    CJust x -> x
+    _       -> error "inaccessible"
+
 
 -- | Map 'ConfgCode' types to the types of config values.
 type family ToVal (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
@@ -400,6 +407,30 @@ type family ToVal (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
     ToVal (Option a)   ps        = ToValueMaybe (ToVal a ps)
     ToVal a            '[]       = Just (ToConfig a Id)
     ToVal a            (p ': ps) = Nothing
+
+-- | This is '<|>' on 'Maybe' lifted to the type level.
+type family OrElse (x :: Maybe k) (y :: Maybe k) :: Maybe k where
+    OrElse (Just x) y = Just x
+    OrElse Nothing  y = y
+
+-- | Compile-time 'Maybe'.  Type-level 'Just' / 'Nothing' (as produced
+-- by 'ToVal') are embedded in each constructor, resp..  Since 'Just'
+-- and 'Nothing' are different types, 'CNothing' and 'CJust' can be
+-- distinguished by the type checker.
+data CMaybe (a :: Maybe *) where
+    CNothing :: CMaybe Nothing
+    CJust    :: a -> CMaybe (Just a)
+
+-- | This is a version of '<|>' on 'Maybe' for 'CMaybe'.
+orElse :: CMaybe a -> CMaybe b -> CMaybe (OrElse a b)
+orElse (CJust x) _ = CJust x
+orElse CNothing  y = y
+
+
+-- *** options
+
+-- for selecting optional parts, i don't think i have found the most
+-- elegant solution yet.
 
 type family ToValueMaybe (a :: Maybe *) :: Maybe * where
     ToValueMaybe (Just x) = Just (Maybe x)
@@ -417,27 +448,6 @@ instance NothingValue Nothing where
 
 instance NothingValue (Just x) where
   nothingValue _ = CJust Nothing
-
--- This is '<|>' on 'Maybe' lifted to the type level.
-type family OrElse (x :: Maybe k) (y :: Maybe k) :: Maybe k where
-    OrElse (Just x) y = Just x
-    OrElse Nothing  y = y
-
-data CMaybe (a :: Maybe *) where
-    CNothing :: CMaybe Nothing
-    CJust    :: a -> CMaybe (Just a)
-
--- This is a version of '<|>' on 'Maybe' for 'CMaybe'.
-orElse :: CMaybe a -> CMaybe b -> CMaybe (OrElse a b)
-orElse (CJust x) _ = CJust x
-orElse CNothing  y = y
-
--- As we expect, this version will just cause a type error if it is
--- applied to an illegal path.
-(>>.) :: forall cfg t ps r . (Sel cfg ps, ToValE cfg ps ~ Done r) => Tagged cfg -> Proxy ps -> r
-(>>.) v p = case sel v p of
-    CJust x -> x
-    _       -> error "inaccessible"
 
 
 -- *** cfg traversal
