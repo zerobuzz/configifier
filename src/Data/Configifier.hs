@@ -690,6 +690,7 @@ instance (cfg ~ List cfg', CanonicalizePartial cfg')
 
 instance (cfg ~ Option cfg', CanonicalizePartial cfg')
         => CanonicalizePartial (Option cfg') where
+    canonicalizePartial (TaggedM NothingO) = TaggedM NothingO
     canonicalizePartial (TaggedM (JustO x)) = if emptyPartial $ tag x
         then TaggedM NothingO
         else TaggedM . JustO . fromTaggedM . canonicalizePartial . tag $ x
