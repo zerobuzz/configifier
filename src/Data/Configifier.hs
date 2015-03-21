@@ -1,8 +1,6 @@
 {-# LANGUAGE ConstraintKinds       #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE DeriveDataTypeable    #-}
-{-# LANGUAGE DeriveFunctor         #-}
-{-# LANGUAGE EmptyDataDecls        #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
@@ -16,11 +14,8 @@
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE UndecidableInstances  #-}
 {-# LANGUAGE ViewPatterns          #-}
-
-{-# LANGUAGE UndecidableInstances  #-}  -- is there a way to remove this?
-
-{-# OPTIONS  #-}
 
 module Data.Configifier
 where

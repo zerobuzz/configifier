@@ -6,8 +6,6 @@
 {-# LANGUAGE Rank2Types                               #-}
 {-# LANGUAGE GADTs                                    #-}
 
-{-# OPTIONS  #-}
-
 module Data.ConfigifierSpec
 where
 
