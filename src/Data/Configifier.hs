@@ -25,14 +25,13 @@ import Control.Exception (Exception)
 import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON, (.=))
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
-import Data.Dynamic (Dynamic, toDyn)
 import Data.Either.Combinators (mapLeft)
 import Data.Function (on)
 import Data.List (nubBy, intercalate)
 import Data.Maybe (catMaybes)
 import Data.Monoid (Monoid, (<>), mempty, mappend, mconcat)
 import Data.String.Conversions (ST, SBS, cs)
-import Data.Typeable (Typeable, Proxy(Proxy), TypeRep, typeOf)
+import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 
 import qualified Data.Aeson as Aeson
@@ -392,7 +391,7 @@ parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
 -- | Map a 'Tagged' config value and a type-level path to the part of
 -- the config value the path points to.  Trigger an informative type
 -- error if path does not exist.
-(>>.) :: forall cfg t ps r . (Sel cfg ps, ToValE cfg ps ~ Done r) => Tagged cfg -> Proxy ps -> r
+(>>.) :: forall cfg ps r . (Sel cfg ps, ToValE cfg ps ~ Done r) => Tagged cfg -> Proxy ps -> r
 (>>.) v p = case sel v p of
     CJust x -> x
     _       -> error "inaccessible"

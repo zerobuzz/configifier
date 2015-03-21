@@ -9,12 +9,10 @@
 module Data.ConfigifierSpec
 where
 
-import Data.Dynamic
 import Data.Either
-import Data.Maybe
 import Data.Monoid
+import Data.Proxy
 import Data.String.Conversions
-import Prelude
 import Test.Hspec
 
 import qualified Data.Aeson as Aeson
