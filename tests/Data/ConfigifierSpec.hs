@@ -30,7 +30,9 @@ tests = hspec spec
 spec :: Spec
 spec = describe "Configifier" $ do
     miscSpec
+    selectSpec
     mergeSpec
+    sourcesSpec
 
 miscSpec :: Spec
 miscSpec = do
@@ -135,7 +137,30 @@ miscSpec = do
 
          in run text want
 
-  describe "select (static)" $ do
+
+run :: forall cfg tm ti .
+      ( tm ~ TaggedM cfg
+      , ti ~ Tagged cfg
+      , Show tm, Eq tm, Show ti, Eq ti
+      , Monoid tm
+      , Freeze cfg
+      , Aeson.FromJSON tm
+      , Aeson.ToJSON tm
+      , HasParseShellEnv cfg
+      , HasParseCommandLine cfg
+      , CanonicalizePartial cfg
+      ) => SBS -> ti -> IO ()
+run text parsedWant = do
+    let f :: SBS -> Either Error ti
+        f sbs = configify [ConfigFileYaml sbs]
+
+    f text `shouldBe` Right parsedWant
+    f (renderConfigFile parsedWant) `shouldBe` Right parsedWant
+
+
+selectSpec :: Spec
+selectSpec = do
+  describe "select" $ do
     it "(\"l\" :> Int)" $
         let t :: forall c . (c ~ ToConfigCode ("l" :> Int)) => IO ()
             t = cfg >>. (Proxy :: Proxy '["l"]) `shouldBe` 3
@@ -210,26 +235,6 @@ miscSpec = do
          in t
 
 
-run :: forall cfg tm ti .
-      ( tm ~ TaggedM cfg
-      , ti ~ Tagged cfg
-      , Show tm, Eq tm, Show ti, Eq ti
-      , Monoid tm
-      , Freeze cfg
-      , Aeson.FromJSON tm
-      , Aeson.ToJSON tm
-      , HasParseShellEnv cfg
-      , HasParseCommandLine cfg
-      , CanonicalizePartial cfg
-      ) => SBS -> ti -> IO ()
-run text parsedWant = do
-    let f :: SBS -> Either Error ti
-        f sbs = configify [ConfigFileYaml sbs]
-
-    f text `shouldBe` Right parsedWant
-    f (renderConfigFile parsedWant) `shouldBe` Right parsedWant
-
-
 mergeSpec :: Spec
 mergeSpec = describe "instance Monoid (ToConfigCode *)" $
         let cfg1, cfg2, cfg3, cfg4, cfg5 ::
@@ -267,3 +272,47 @@ mergeSpec = describe "instance Monoid (ToConfigCode *)" $
             -- right JustO wins over left JustO
 
             it "8" $ (cfg1 <> cfg5) `shouldBe` cfg5
+
+
+sourcesSpec :: Spec
+sourcesSpec = describe "sources" $
+    let f :: ( c  ~ ToConfigCode c'
+             , c' ~ ("frontend" :> sc :- Maybe ("backend" :> sc))
+             , sc ~ ("bind_port" :> Int :- Maybe ("expose_host" :> ST))
+             ) => [Source] -> Result c
+        f = configify
+
+        configFile1 :: Source = ConfigFileYaml . cs . unlines $
+              "frontend:" :
+              "  bind_port: 3" :
+              "  expose_host: host" :
+              "backend:" :
+              "  bind_port: 4" :
+              "  expose_host: hist" :
+              []
+        configFile2 :: Source = ConfigFileYaml . cs . unlines $
+              "frontend:" :
+              "  bind_port: 3" :
+              []
+
+        shellEnv1 :: Source = ShellEnv [("FRONTEND_BIND_PORT", "18")]
+        shellEnv2 :: Source = ShellEnv [("BACKEND_EXPOSE_HOST", "bom")]
+
+        commandLine1 :: Source = CommandLine ["--frontend-bind-port", "31"]
+        commandLine2 :: Source = CommandLine ["--backend-exposte-host=mab"]
+
+    in do
+        it "1" $
+            f [configFile1] `shouldBe`
+                (Right . Tagged $ Id (Id 3 :- JustO (Id "host"))
+                               :- JustO (Id (Id 4 :- JustO (Id "hist"))))
+
+        it "2" $
+            f [configFile1, shellEnv1, shellEnv2] `shouldBe`
+                (Right . Tagged $ Id (Id 18 :- JustO (Id "host"))
+                               :- JustO (Id (Id 4 :- JustO (Id "bom"))))
+
+        it "3" $
+            f [configFile1, shellEnv1, shellEnv2, commandLine1] `shouldBe`
+                (Right . Tagged $ Id (Id 31 :- JustO (Id "host"))
+                               :- JustO (Id (Id 4 :- JustO (Id "bom"))))
