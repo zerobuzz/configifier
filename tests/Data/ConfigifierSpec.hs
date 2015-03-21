@@ -302,6 +302,9 @@ sourcesSpec = describe "sources" $
         commandLine2 :: Source = CommandLine ["--backend-exposte-host=mab"]
 
     in do
+        it "parseArgs" $
+            parseArgs (["--arg=31", "--flob", "gluh"] :: Args) `shouldBe` Right ([("ARG", "31"), ("FLOB", "gluh")] :: Env)
+
         it "1" $
             f [configFile1] `shouldBe`
                 (Right . Tagged $ Id (Id 3 :- JustO (Id "host"))

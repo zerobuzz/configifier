@@ -380,12 +380,12 @@ parseArgs (h:h':t) = ((++) <$> parseArgsWithEqSign h   <*> parseArgs (h':t))
 
 parseArgsWithEqSign :: String -> Either String Env
 parseArgsWithEqSign s = case cs s Regex.=~- "^--([^=]+)=(.*)$" of
-    [_, k, v] -> Right [(cs k, cs v)]
+    [_, k, v] -> Right [(map toUpper $ cs k, cs v)]
     bad -> Left $ "could not parse last arg: " ++ show (s, bad)
 
 parseArgsWithSpace :: String -> String -> Either String Env
 parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
-    [_, k] -> Right [(cs k, cs v)]
+    [_, k] -> Right [(map toUpper $ cs k, cs v)]
     bad -> Left $ "could not parse long-arg with value: " ++ show (s, v, bad)
 
 
