@@ -472,16 +472,20 @@ instance ( cfg ~ Label p cfg'
     sel' (Tagged (Id a)) Proxy = sel' (Tagged a :: Tagged cfg') (Proxy :: Proxy ps)
 
 instance ( cfg ~ Option cfg'
-      --   , ToVal cfg ps ~ Just (Maybe r)
          , NothingValue (ToVal cfg' ps)
          , Sel' cfg' ps
          ) => Sel' (Option cfg') ps where
     sel' (Tagged NothingO)  _  = nothingValue (Proxy :: Proxy (ToVal cfg' ps))
-    sel' (Tagged (JustO a)) ps = toValueMaybe $ sel' (Tagged a         :: Tagged cfg') ps
+    sel' (Tagged (JustO a)) ps = toValueMaybe $ sel' (Tagged a :: Tagged cfg') ps
 
 instance Sel'' cfg ps => Sel' cfg ps where
     sel' = sel''
 
+-- | Helper class for disambiguating overlaps.  The trick is that the
+-- 'Sel'' instance based on the 'Sel''' constraint is more general
+-- than all other instances, so @OverlappingInstances@ will ensure it
+-- is matched last.  This way, no instance of 'Sel''' can wrongly
+-- overlap with any instance of 'Sel''.
 class Sel'' cfg ps where
     sel'' :: Tagged cfg -> Proxy ps -> CMaybe (ToVal cfg ps)
 
