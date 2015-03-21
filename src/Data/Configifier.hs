@@ -154,6 +154,7 @@ data Error =
         { invalidYamlInput :: SBS
         , invalidYamlMsg :: String
         }
+    | ShellEnvNil
     | ShellEnvNoParse
         { shellEnvNoParseType  :: String
         , shellEnvNoParseValue :: String
@@ -299,9 +300,11 @@ instance (HasParseShellEnv a, HasParseShellEnv b) => HasParseShellEnv (Record a 
 -- only then worries about trailing '_'.)
 instance (KnownSymbol path, HasParseShellEnv a) => HasParseShellEnv (Label path a) where
     parseShellEnv [] = return $ TaggedM Nothing
-    parseShellEnv env@(_:_) = do
-          TaggedM a :: TaggedM a <- parseShellEnv env'
-          return $ TaggedM (Just a)
+    parseShellEnv env@(_:_) =
+          case parseShellEnv env' :: Either Error (TaggedM a) of
+              Right (TaggedM a) -> Right . TaggedM . Just $ a
+              Left ShellEnvNil  -> Right . TaggedM $ Nothing
+              Left e            -> Left e
       where
         key = symbolVal (Proxy :: Proxy path)
         env' = catMaybes $ crop <$> env
@@ -333,20 +336,15 @@ instance HasParseShellEnv a => HasParseShellEnv (Option a) where
         TaggedM a :: TaggedM a <- parseShellEnv env
         return $ TaggedM (JustO a)
 
--- | FIXME: if we have two shell env variables, and one is a prefix of
--- another, this will throw an exception, but we want to handle
--- non-prefix-free shell environments.  this requires a bit more
--- thinking, though.  i think it can only happen if we want to set a
--- complex sub-config with one variable (e.g., as a json string) and
--- then go into that sub-structure and change something in there.
--- arguably a fringe situation.
 instance (Typeable a, FromJSON (TaggedM (Type a))) => HasParseShellEnv (Type a) where
-    parseShellEnv [("", s)] = mapLeft renderError (Yaml.decodeEither (cs s) :: Either String (TaggedM (Type a)))
+    parseShellEnv = f
       where
-        renderError :: String -> Error
-        renderError e = ShellEnvNoParse (show $ typeOf (undefined :: a)) s e
-    parseShellEnv bad = error $ "instance HasParseShellEnv (Type "
-                                  ++ show (typeOf (undefined :: a)) ++ "): " ++ show bad
+        f [] = Left $ ShellEnvNil
+        f (filter (null . fst) -> [("", s)]) = mapLeft renderError (Yaml.decodeEither (cs s))
+          where
+            renderError :: String -> Error
+            renderError e = ShellEnvNoParse (show $ typeOf (undefined :: a)) s e
+        f bad = error $ "instance HasParseShellEnv (Type a): inconsistent environment: " ++ show bad
 
 
 -- * cli
