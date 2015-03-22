@@ -297,7 +297,7 @@ sourcesSpec = describe "sources" $
         shellEnv2 :: Source = ShellEnv [("BACKEND_EXPOSE_HOST", "bom")]
 
         commandLine1 :: Source = CommandLine ["--frontend-bind-port", "31"]
-        commandLine2 :: Source = CommandLine ["--backend-exposte-host=mab"]
+        commandLine2 :: Source = CommandLine ["--backend-expose-host=mab", "--backend-bind-port=8710"]
 
     in do
         it "parseArgs" $
@@ -317,3 +317,8 @@ sourcesSpec = describe "sources" $
             f [configFile1, shellEnv1, shellEnv2, commandLine1] `shouldBe`
                 (Right . Tagged $ Id (Id 31 :- JustO (Id "host"))
                                :- JustO (Id (Id 4 :- JustO (Id "bom"))))
+
+        it "4" $
+            f [configFile2, commandLine2] `shouldBe`
+                (Right . Tagged $ Id (Id 3 :- NothingO)
+                               :- JustO (Id (Id 8710 :- JustO (Id "mab"))))
