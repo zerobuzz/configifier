@@ -181,7 +181,19 @@ configify :: forall cfg tm .
       , HasParseCommandLine cfg
       , CanonicalizePartial cfg
       ) => [Source] -> Result cfg
-configify sources = sequence (get <$> sources) >>= merge
+configify = configify' (mempty :: tm)
+
+configify' :: forall cfg tm .
+      ( tm ~ TaggedM cfg
+      , Show tm
+      , Monoid tm
+      , Freeze cfg
+      , FromJSON tm
+      , HasParseShellEnv cfg
+      , HasParseCommandLine cfg
+      , CanonicalizePartial cfg
+      ) => tm -> [Source] -> Result cfg
+configify' def sources = sequence (get <$> sources) >>= merge . (def:)
   where
     get :: Source -> Either Error tm
     get (ConfigFileYaml sbs) = parseConfigFile sbs
