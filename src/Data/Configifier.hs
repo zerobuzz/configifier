@@ -402,6 +402,8 @@ parseArgName = map f
     CJust x -> x
     _       -> error "inaccessible"
 
+infix 7 >>.
+
 
 -- | Map 'ConfgCode' types to the types of config values.
 type family ToVal (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
