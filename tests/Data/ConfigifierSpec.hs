@@ -89,10 +89,10 @@ miscSpec = do
 
     it "option, missing in non-empty cfg file" $
         let text :: SBS
-            want :: (c ~ ToConfigCode ("org" :> Int :- Maybe ("bla" :> Int))) => Tagged c
+            want :: (c ~ ToConfigCode ("org" :> Int :*> Maybe ("bla" :> Int))) => Tagged c
 
             text = "org: 3"
-            want = Tagged (Id 3 :- NothingO)
+            want = Tagged (Id 3 :*> NothingO)
 
          in run text want
 
@@ -100,8 +100,8 @@ miscSpec = do
         let text1, text2 :: SBS
             want1, want2 ::
                 ( c  ~ ToConfigCode c'
-                , c' ~ ("frontend" :> sc :- Maybe ("backend" :> sc))
-                , sc ~ ("bind_port" :> Int :- Maybe ("expose_host" :> ST))
+                , c' ~ ("frontend" :> sc :*> Maybe ("backend" :> sc))
+                , sc ~ ("bind_port" :> Int :*> Maybe ("expose_host" :> ST))
                 ) => Tagged c
 
             text1 = cs . unlines $
@@ -117,10 +117,10 @@ miscSpec = do
                       "  bind_port: 3" :
                       []
 
-            want1 = Tagged $ Id (Id 3 :- JustO (Id "host"))
-                          :- JustO (Id (Id 4 :- JustO (Id "hist")))
-            want2 = Tagged $ Id (Id 3 :- NothingO)
-                          :- NothingO
+            want1 = Tagged $ Id (Id 3 :*> JustO (Id "host"))
+                         :*> JustO (Id (Id 4 :*> JustO (Id "hist")))
+            want2 = Tagged $ Id (Id 3 :*> NothingO)
+                         :*> NothingO
 
          in run text1 want1 >> run text2 want2
 
@@ -175,13 +175,13 @@ selectSpec = do
                 cfg :: Tagged c = Tagged . Id . Id $ False
          in t
 
-    it "(\"l\" :> Int :- \"l'\" :> Bool)" $
-        let t :: forall c . (c ~ ToConfigCode ("l" :> Int :- "l'" :> Bool)) => IO ()
+    it "(\"l\" :> Int :*> \"l'\" :> Bool)" $
+        let t :: forall c . (c ~ ToConfigCode ("l" :> Int :*> "l'" :> Bool)) => IO ()
             t = do
                   cfg >>. (Proxy :: Proxy '["l"]) `shouldBe` 0
                   cfg >>. (Proxy :: Proxy '["l'"]) `shouldBe` False
               where
-                cfg :: Tagged c = Tagged $ Id 0 :- Id False
+                cfg :: Tagged c = Tagged $ Id 0 :*> Id False
          in t
 
     it "(Maybe (\"l\" :> Int))" $
@@ -204,32 +204,32 @@ selectSpec = do
                 cfg3 :: Tagged c = Tagged $ NothingO
          in t
 
-    it "(\"l\" :> Int :- \"l'\" :> Int)" $
-        let t :: forall c . ( c ~ ToConfigCode ("l" :> Int :- "l'" :> Int)
+    it "(\"l\" :> Int :*> \"l'\" :> Int)" $
+        let t :: forall c . ( c ~ ToConfigCode ("l" :> Int :*> "l'" :> Int)
                             , ToVal c '["l"] ~ Just Int  -- (redundant)
-                            , ToConfig c Id ~ (Id Int :- Id Int)  -- (redundant)
+                            , ToConfig c Id ~ (Id Int :*> Id Int)  -- (redundant)
                             ) => IO ()
             t = do
                   cfg1 >>. (Proxy :: Proxy '["l"])  `shouldBe` 3
                   cfg1 >>. (Proxy :: Proxy '["l'"]) `shouldBe` 0
                   cfg2 >>. (Proxy :: Proxy '["l'"]) `shouldBe` 0
               where
-                cfg1 :: Tagged c = Tagged $ Id 3 :- Id (0 :: Int)
-                cfg2 :: Tagged c = Tagged $ Id 4 :- Id (0 :: Int)
+                cfg1 :: Tagged c = Tagged $ Id 3 :*> Id (0 :: Int)
+                cfg2 :: Tagged c = Tagged $ Id 4 :*> Id (0 :: Int)
          in t
 
-    it "(\"l\" :> Int :- Maybe (\"l'\" :> Int))" $
-        let t :: forall c . ( c ~ ToConfigCode ("l" :> Int :- Maybe ("l'" :> Int))
+    it "(\"l\" :> Int :*> Maybe (\"l'\" :> Int))" $
+        let t :: forall c . ( c ~ ToConfigCode ("l" :> Int :*> Maybe ("l'" :> Int))
                             , ToVal c '["l"] ~ Just Int  -- (redundant)
-                            , ToConfig c Id ~ (Id Int :- MaybeO (Id Int))  -- (redundant)
+                            , ToConfig c Id ~ (Id Int :*> MaybeO (Id Int))  -- (redundant)
                             ) => IO ()
             t = do
                   cfg1 >>. (Proxy :: Proxy '["l"])  `shouldBe` 3
                   cfg1 >>. (Proxy :: Proxy '["l'"]) `shouldBe` (Just 0)
                   cfg2 >>. (Proxy :: Proxy '["l'"]) `shouldBe` Nothing
               where
-                cfg1 :: Tagged c = Tagged $ Id 3 :- JustO (Id (0 :: Int))
-                cfg2 :: Tagged c = Tagged $ Id 4 :- NothingO
+                cfg1 :: Tagged c = Tagged $ Id 3 :*> JustO (Id (0 :: Int))
+                cfg2 :: Tagged c = Tagged $ Id 4 :*> NothingO
          in t
 
 
@@ -237,24 +237,24 @@ mergeSpec :: Spec
 mergeSpec = describe "instance Monoid (ToConfigCode *)" $
         let cfg1, cfg2, cfg3, cfg4, cfg5 ::
                 ( c  ~ ToConfigCode c'
-                , c' ~ Maybe ("frontend" :> sc' :- Maybe ("backend" :> sc'))
-                , sc' ~ ("bind_port" :> Int :- Maybe ("expose_host" :> ST))
+                , c' ~ Maybe ("frontend" :> sc' :*> Maybe ("backend" :> sc'))
+                , sc' ~ ("bind_port" :> Int :*> Maybe ("expose_host" :> ST))
                 ) => TaggedM c
 
             cfg1 = TaggedM . JustO $
-                      Just (Just 3 :- JustO (Just "host"))
-                   :- JustO (Just (Just 4 :- JustO (Just "hist")))
+                      Just (Just 3 :*> JustO (Just "host"))
+                   :*> JustO (Just (Just 4 :*> JustO (Just "hist")))
             cfg2 = TaggedM . JustO $
-                      Just (Just 3 :- NothingO)
-                   :- JustO (Just (Just 4 :- NothingO))
+                      Just (Just 3 :*> NothingO)
+                   :*> JustO (Just (Just 4 :*> NothingO))
             cfg3 = TaggedM . JustO $
-                      Just (Just 3 :- NothingO)
-                   :- NothingO
+                      Just (Just 3 :*> NothingO)
+                   :*> NothingO
             cfg4 = TaggedM NothingO
 
             cfg5 = TaggedM . JustO $
-                      Just (Just 1 :- JustO (Just "ast"))
-                   :- JustO (Just (Just 5 :- JustO (Just "hust")))
+                      Just (Just 1 :*> JustO (Just "ast"))
+                   :*> JustO (Just (Just 5 :*> JustO (Just "hust")))
         in do
             -- JustO wins over NothingO
 
@@ -275,8 +275,8 @@ mergeSpec = describe "instance Monoid (ToConfigCode *)" $
 sourcesSpec :: Spec
 sourcesSpec = describe "sources" $
     let f :: ( c  ~ ToConfigCode c'
-             , c' ~ ("frontend" :> sc :- Maybe ("backend" :> sc))
-             , sc ~ ("bind_port" :> Int :- Maybe ("expose_host" :> ST))
+             , c' ~ ("frontend" :> sc :*> Maybe ("backend" :> sc))
+             , sc ~ ("bind_port" :> Int :*> Maybe ("expose_host" :> ST))
              ) => [Source] -> Result c
         f = configify
 
@@ -305,20 +305,20 @@ sourcesSpec = describe "sources" $
 
         it "1" $
             f [configFile1] `shouldBe`
-                (Right . Tagged $ Id (Id 3 :- JustO (Id "host"))
-                               :- JustO (Id (Id 4 :- JustO (Id "hist"))))
+                (Right . Tagged $ Id (Id 3 :*> JustO (Id "host"))
+                               :*> JustO (Id (Id 4 :*> JustO (Id "hist"))))
 
         it "2" $
             f [configFile1, shellEnv1, shellEnv2] `shouldBe`
-                (Right . Tagged $ Id (Id 18 :- JustO (Id "host"))
-                               :- JustO (Id (Id 4 :- JustO (Id "bom"))))
+                (Right . Tagged $ Id (Id 18 :*> JustO (Id "host"))
+                               :*> JustO (Id (Id 4 :*> JustO (Id "bom"))))
 
         it "3" $
             f [configFile1, shellEnv1, shellEnv2, commandLine1] `shouldBe`
-                (Right . Tagged $ Id (Id 31 :- JustO (Id "host"))
-                               :- JustO (Id (Id 4 :- JustO (Id "bom"))))
+                (Right . Tagged $ Id (Id 31 :*> JustO (Id "host"))
+                               :*> JustO (Id (Id 4 :*> JustO (Id "bom"))))
 
         it "4" $
             f [configFile2, commandLine2] `shouldBe`
-                (Right . Tagged $ Id (Id 3 :- NothingO)
-                               :- JustO (Id (Id 8710 :- JustO (Id "mab"))))
+                (Right . Tagged $ Id (Id 3 :*> NothingO)
+                               :*> JustO (Id (Id 8710 :*> JustO (Id "mab"))))

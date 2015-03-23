@@ -45,9 +45,9 @@ import qualified Text.Regex.Easy as Regex
 -- * config types
 
 -- | Construction of config records (@cons@ for record fields).
-data a :- b = a :- b
+data a :*> b = a :*> b
   deriving (Eq, Ord, Show, Typeable)
-infixr 6 :-
+infixr 6 :*>
 
 -- | Construction of config record fields.
 data (s :: Symbol) :> (t :: *)
@@ -73,7 +73,7 @@ infixr 6 `Record`
 
 -- | Map user-provided config type to 'ConfigCode' types.
 type family ToConfigCode (a :: *) :: ConfigCode * where
-    ToConfigCode (a :- b)  = Record (ToConfigCode a) (ToConfigCode b)
+    ToConfigCode (a :*> b) = Record (ToConfigCode a) (ToConfigCode b)
     ToConfigCode (s :> a)  = Label s (ToConfigCode a)
     ToConfigCode (a :>: s) = Descr (ToConfigCode a) s
     ToConfigCode [a]       = List (ToConfigCode a)
@@ -91,7 +91,7 @@ type family NoDesc (a :: ConfigCode *) :: ConfigCode * where
 
 -- | Map 'ConfgCode' types to the types of config values.
 type family ToConfig (a :: ConfigCode *) (f :: * -> *) :: * where
-    ToConfig (Record a b) f = ToConfig a f :- ToConfig b f
+    ToConfig (Record a b) f = ToConfig a f :*> ToConfig b f
     ToConfig (Label s a)  f = f (ToConfig a f)
     ToConfig (List a)     f = [ToConfig a f]
     ToConfig (Option a)   f = MaybeO (ToConfig a f)
@@ -205,9 +205,9 @@ instance ( t1 ~ ToConfig cfg1 Maybe, ToJSON (TaggedM cfg1)
          , t2 ~ ToConfig cfg2 Maybe, ToJSON (TaggedM cfg2)
          )
         => ToJSON (TaggedM (Record cfg1 cfg2)) where
-    toJSON (TaggedM (o1 :- o2)) = case ( toJSON (TaggedM o1 :: TaggedM cfg1)
-                                       , toJSON (TaggedM o2 :: TaggedM cfg2)
-                                       ) of
+    toJSON (TaggedM (o1 :*> o2)) = case ( toJSON (TaggedM o1 :: TaggedM cfg1)
+                                        , toJSON (TaggedM o2 :: TaggedM cfg2)
+                                        ) of
         (Object m1, Object m2) -> Object $ HashMap.union m2 m1
         (v, Null)              -> v
         (_, v')                -> v'
@@ -249,7 +249,7 @@ instance (FromJSON (TaggedM cfg1), FromJSON (TaggedM cfg2)) => FromJSON (TaggedM
     parseJSON json = do
         TaggedM o1 :: TaggedM cfg1 <- Aeson.parseJSON json
         TaggedM o2 :: TaggedM cfg2 <- Aeson.parseJSON json
-        return . TaggedM $ o1 :- o2
+        return . TaggedM $ o1 :*> o2
 
 -- | @instance FromJSON Label@ (tolerates unknown fields in json object.)
 instance (FromJSON (TaggedM cfg), KnownSymbol s) => FromJSON (TaggedM (Label s cfg)) where
@@ -290,7 +290,7 @@ instance (HasParseShellEnv a, HasParseShellEnv b) => HasParseShellEnv (Record a 
     parseShellEnv env = do
         TaggedM x :: TaggedM a <- parseShellEnv env
         TaggedM y :: TaggedM b <- parseShellEnv env
-        return . TaggedM $ x :- y
+        return . TaggedM $ x :*> y
 
 -- | The paths into the recursive structure of the config file are
 -- concatenated to shell variable names with separating '_'.  (It is
@@ -469,7 +469,7 @@ instance ( cfg ~ Record cfg' cfg''
          , Sel cfg' ps
          , Sel cfg'' ps
          ) => Sel (Record cfg' cfg'') ps where
-    sel (Tagged (a :- b)) ps = orElse (sel (Tagged a :: Tagged cfg') ps) (sel (Tagged b :: Tagged cfg'') ps)
+    sel (Tagged (a :*> b)) ps = orElse (sel (Tagged a :: Tagged cfg') ps) (sel (Tagged b :: Tagged cfg'') ps)
 
 instance ( cfg ~ Label p cfg'
          -- @ToVal cfg ps ~ Just t@ or @ToVal cfg ps ~ Nothing@
@@ -549,10 +549,10 @@ thaw = TaggedM . thw (Proxy :: Proxy cfg) . fromTagged
 instance (Monoid (TaggedM a), Monoid (TaggedM b)) => Monoid (TaggedM (Record a b)) where
     mempty =
         TaggedM $ fromTaggedM (mempty :: TaggedM a)
-               :- fromTaggedM (mempty :: TaggedM b)
-    mappend (TaggedM (x :- y)) (TaggedM (x' :- y')) =
+              :*> fromTaggedM (mempty :: TaggedM b)
+    mappend (TaggedM (x :*> y)) (TaggedM (x' :*> y')) =
         TaggedM $ (fromTaggedM $ tagA x <> tagA x')
-               :- (fromTaggedM $ tagB y <> tagB y')
+              :*> (fromTaggedM $ tagB y <> tagB y')
       where
         tagA v = TaggedM v :: TaggedM a
         tagB v = TaggedM v :: TaggedM b
@@ -599,15 +599,15 @@ class Freeze c where
     thw :: Proxy c -> ToConfig c Id -> ToConfig c Maybe
 
 instance (Freeze a, Freeze b) => Freeze (Record a b) where
-    frz Proxy path (x :- y) = do
+    frz Proxy path (x :*> y) = do
         x' <- frz (Proxy :: Proxy a) path x
         y' <- frz (Proxy :: Proxy b) path y
-        Right $ x' :- y'
+        Right $ x' :*> y'
 
-    thw Proxy (x :- y) =
+    thw Proxy (x :*> y) =
         let x' = thw (Proxy :: Proxy a) x in
         let y' = thw (Proxy :: Proxy b) y in
-        x' :- y'
+        x' :*> y'
 
 instance (KnownSymbol s, Freeze t) => Freeze (Label s t) where
     frz Proxy path = f
@@ -657,11 +657,11 @@ class CanonicalizePartial a where
 
 instance (CanonicalizePartial cfg, CanonicalizePartial cfg')
         => CanonicalizePartial (Record cfg cfg') where
-    canonicalizePartial (TaggedM (a :- a')) = TaggedM $
+    canonicalizePartial (TaggedM (a :*> a')) = TaggedM $
             fromTaggedM (canonicalizePartial (TaggedM a :: TaggedM cfg))
-         :- fromTaggedM (canonicalizePartial (TaggedM a' :: TaggedM cfg'))
+         :*> fromTaggedM (canonicalizePartial (TaggedM a' :: TaggedM cfg'))
 
-    emptyPartial (TaggedM (a :- a')) =
+    emptyPartial (TaggedM (a :*> a')) =
             emptyPartial (TaggedM a :: TaggedM cfg)
          && emptyPartial (TaggedM a' :: TaggedM cfg')
 

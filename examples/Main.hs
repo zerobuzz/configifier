@@ -34,29 +34,29 @@ type Cfg = NoDesc CfgDesc
 type CfgDesc = ToConfigCode Cfg'
 
 type Cfg' =
-            "frontend"      :> ServerCfg :>: "descr"
-  :- Maybe ("backend"       :> ServerCfg)
-  :-        "default_users" :> [UserCfg] :>: "list of users that are created on start if database is empty"
+             "frontend"      :> ServerCfg :>: "descr"
+  :*> Maybe ("backend"       :> ServerCfg)
+  :*>        "default_users" :> [UserCfg] :>: "list of users that are created on start if database is empty"
 
 type ServerCfg =
-            "bind_port"   :> Int
-  :-        "bind_host"   :> ST
-  :- Maybe ("expose_host" :> ST)
+             "bind_port"   :> Int
+  :*>        "bind_host"   :> ST
+  :*> Maybe ("expose_host" :> ST)
 
 type UserCfg =
-            "name"     :> ST :>: "user name (must be unique)"
-  :-        "email"    :> ST :>: "email address (must also be unique)"
-  :-        "password" :> ST :>: "password (not encrypted)"
+             "name"     :> ST :>: "user name (must be unique)"
+  :*>        "email"    :> ST :>: "email address (must also be unique)"
+  :*>        "password" :> ST :>: "password (not encrypted)"
 
 
 defaultCfg :: Tagged Cfg
 defaultCfg = Tagged $
-     Id (Id 8001 :- Id "localhost" :- JustO (Id "expose"))
-  :- JustO (Id (Id 8002 :- Id "localhost" :- NothingO))
-  :- Id [u1, u2]
+      Id (Id 8001 :*> Id "localhost" :*> JustO (Id "expose"))
+  :*> JustO (Id (Id 8002 :*> Id "localhost" :*> NothingO))
+  :*> Id [u1, u2]
   where
-    u1 = Id "ralf" :- Id "ralf@localhost" :- Id "gandalf"
-    u2 = Id "claudi" :- Id "claudi@remotehost" :- Id "also_gandalf"
+    u1 = Id "ralf" :*> Id "ralf@localhost" :*> Id "gandalf"
+    u2 = Id "claudi" :*> Id "claudi@remotehost" :*> Id "also_gandalf"
 
 
 main :: IO ()
