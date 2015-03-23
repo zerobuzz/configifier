@@ -419,6 +419,7 @@ infix 7 >>.
 
 -- | Map 'ConfgCode' types to the types of config values.
 type family ToVal (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
+    ToVal (Record a b) '[]       = Just (ToConfig (Record a b) Id)
     ToVal (Record a b) ps        = OrElse (ToVal a ps) (ToVal b ps)
     ToVal (Label p a)  (p ': ps) = ToVal a ps
     ToVal (Option a)   ps        = ToValueMaybe (ToVal a ps)
@@ -478,12 +479,15 @@ instance NothingValue (Just x) where
 class Sel cfg ps where
     sel :: Tagged cfg -> Proxy ps -> CMaybe (ToVal cfg ps)
 
+instance Sel (Record cfg' cfg'') '[] where
+    sel (Tagged record) Proxy = CJust record
+
 instance ( cfg ~ Record cfg' cfg''
          -- @ToVal cfg ps ~ Just t@ or @ToVal cfg ps ~ Nothing@
-         , Sel cfg' ps
-         , Sel cfg'' ps
-         ) => Sel (Record cfg' cfg'') ps where
-    sel (Tagged (a :*> b)) ps = orElse (sel (Tagged a :: Tagged cfg') ps) (sel (Tagged b :: Tagged cfg'') ps)
+         , Sel cfg' (p ': ps)
+         , Sel cfg'' (p ': ps)
+         ) => Sel (Record cfg' cfg'') (p ': ps) where
+    sel (Tagged (a :*> b)) path = orElse (sel (Tagged a :: Tagged cfg') path) (sel (Tagged b :: Tagged cfg'') path)
 
 instance ( cfg ~ Label p cfg'
          -- @ToVal cfg ps ~ Just t@ or @ToVal cfg ps ~ Nothing@

@@ -232,6 +232,33 @@ selectSpec = do
                 cfg2 :: Tagged c = Tagged $ Id 4 :*> NothingO
          in t
 
+    it "partial select paths and non-leaf sub-configs" $
+        let t :: forall config config' ponfig ponfig' .
+                    ( config ~ Tagged (NoDesc (ToConfigCode config'))
+                    , config' ~ (Maybe ("a" :> ST) :*> ("b" :> ST))
+
+                    , ponfig ~ Tagged (NoDesc (ToConfigCode ponfig'))
+                    , ponfig' ~ ("c" :> config')
+
+                    ) => IO ()
+            t = do
+                  let Right (cfg1 :: ponfig) = configify [ConfigFileYaml . cs . unlines $
+                          "c:" :
+                          "  a: goih" :
+                          "  b: c38" :
+                          "..." :
+                          []]
+
+                      Right (Tagged cfg2 :: config) = configify [ConfigFileYaml . cs . unlines $
+                          "a: goih" :
+                          "b: c38" :
+                          "..." :
+                          []]
+
+                  (cfg1 >>. (Proxy :: Proxy '["c"])) `shouldBe` cfg2
+
+        in t
+
 
 mergeSpec :: Spec
 mergeSpec = describe "instance Monoid (ToConfigCode *)" $
