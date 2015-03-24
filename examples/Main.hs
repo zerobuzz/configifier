@@ -17,6 +17,7 @@ module Main
 where
 
 import Control.Applicative ((<$>))
+import Control.Exception (throwIO)
 import Data.String.Conversions (ST, cs)
 import Data.Typeable (Proxy(Proxy))
 import System.Environment (getEnvironment, getArgs)
@@ -30,20 +31,21 @@ import Data.Configifier
 
 -- * an interesting example
 
-type Cfg = NoDesc CfgDesc
 type CfgDesc = ToConfigCode Cfg'
-
+type Cfg = NoDesc (ToConfigCode Cfg')
 type Cfg' =
-             "frontend"      :> ServerCfg :>: "descr"
-  :*> Maybe ("backend"       :> ServerCfg)
-  :*>        "default_users" :> [UserCfg] :>: "list of users that are created on start if database is empty"
+             "frontend"      :> ServerCfg' :>: "descr"
+  :*> Maybe ("backend"       :> ServerCfg')
+  :*>        "default_users" :> [UserCfg'] :>: "list of users that are created on start if database is empty"
 
-type ServerCfg =
+type ServerCfg = NoDesc (ToConfigCode ServerCfg')
+type ServerCfg' =
              "bind_port"   :> Int
   :*>        "bind_host"   :> ST
   :*> Maybe ("expose_host" :> ST)
 
-type UserCfg =
+type UserCfg = NoDesc (ToConfigCode UserCfg')
+type UserCfg' =
              "name"     :> ST :>: "user name (must be unique)"
   :*>        "email"    :> ST :>: "email address (must also be unique)"
   :*>        "password" :> ST :>: "password (not encrypted)"
@@ -76,10 +78,50 @@ main = do
     dump defaultCfg
 
     case configify sources :: Result Cfg of
-        Left e -> print e
+        Left e -> throwIO e
         Right cfg -> do
             dump cfg
 
             putStrLn "accessing config values:"
-            print $ cfg >>. (Proxy :: Proxy '["frontend"])
+            print $ (Tagged (cfg >>. (Proxy :: Proxy '["frontend"])) :: Tagged ServerCfg)
             print $ cfg >>. (Proxy :: Proxy '["frontend", "expose_host"])
+            print $ cfg >>. (Proxy :: Proxy '["frontend", "bind_port"])
+
+
+{-
+
+Example session:
+
+$ configifier-example
+[...]
+accessing config values:
+(Tagged Id 8001 :*> (Id "localhost" :*> JustO (Id "fost")))
+Just "fost"
+8001
+
+$ FRONTEND_BIND_PORT=31 configifier-example
+[...]
+accessing config values:
+(Tagged Id 31 :*> (Id "localhost" :*> JustO (Id "fost")))
+Just "fost"
+31
+
+$ FRONTEND_BIND_PORT=31 configifier-example --frontend-bind-port 15
+[...]
+accessing config values:
+(Tagged Id 15 :*> (Id "localhost" :*> JustO (Id "fost")))
+Just "fost"
+15
+
+$ configifier-example --frontend-expose-host "false"
+[...]
+configifier-example: CommandLinePrimitiveOtherError (ShellEnvNoParse {shellEnvNoParseType = "Text", shellEnvNoParseValue = "false", shellEnvNoParseMsg = "when expecting a Text, encountered Boolean instead"})
+
+$ configifier-example --frontend-expose-host "\"false\""
+[...]
+accessing config values:
+(Tagged Id 8001 :*> (Id "localhost" :*> JustO (Id "false")))
+Just "false"
+8001
+
+-}
