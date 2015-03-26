@@ -483,15 +483,12 @@ instance Sel (Record cfg' cfg'') '[] where
     sel (Tagged record) Proxy = CJust record
 
 instance ( cfg ~ Record cfg' cfg''
-         -- @ToVal cfg ps ~ Just t@ or @ToVal cfg ps ~ Nothing@
          , Sel cfg' (p ': ps)
          , Sel cfg'' (p ': ps)
          ) => Sel (Record cfg' cfg'') (p ': ps) where
     sel (Tagged (a :*> b)) path = orElse (sel (Tagged a :: Tagged cfg') path) (sel (Tagged b :: Tagged cfg'') path)
 
 instance ( cfg ~ Label p cfg'
-         -- @ToVal cfg ps ~ Just t@ or @ToVal cfg ps ~ Nothing@
-         , t ~ ToConfig cfg Id
          , Sel cfg' ps
          , KnownSymbol p
          ) => Sel (Label p cfg') (p ': ps) where
