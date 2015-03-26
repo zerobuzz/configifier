@@ -78,19 +78,15 @@ type family ToConfigCode (a :: *) :: ConfigCode * where
     ToConfigCode (Maybe a) = Option (ToConfigCode a)
     ToConfigCode a         = Type a
 
--- | Filter 'Descr' constructors from 'ConfigCode'.
+{-# DEPRECATED NoDesc "use of NoDesc is redundant and can be dropped without replacement." #-}
 type family NoDesc (a :: ConfigCode *) :: ConfigCode * where
-    NoDesc (Record a b) = Record (NoDesc a) (NoDesc b)
-    NoDesc (Label s a)  = Label s (NoDesc a)
-    NoDesc (Descr a s)  = NoDesc a
-    NoDesc (List a)     = List (NoDesc a)
-    NoDesc (Option a)   = Option (NoDesc a)
-    NoDesc (Type a)     = Type a
+    NoDesc a = a
 
 -- | Map 'ConfgCode' types to the types of config values.
 type family ToConfig (a :: ConfigCode *) (f :: * -> *) :: * where
     ToConfig (Record a b) f = ToConfig a f :*> ToConfig b f
     ToConfig (Label s a)  f = f (ToConfig a f)
+    ToConfig (Descr a s)  f = ToConfig a f
     ToConfig (List a)     f = [ToConfig a f]
     ToConfig (Option a)   f = MaybeO (ToConfig a f)
     ToConfig (Type a)     f = a
@@ -232,6 +228,11 @@ instance ( ToJSON (TaggedM cfg)
         Null -> Null
         val        -> object [key .= val]  where key = cs $ symbolVal (Proxy :: Proxy s)
 
+instance ( ToConfig (Descr cfg s) Maybe ~ ToConfig cfg Maybe
+         , ToJSON (TaggedM cfg)
+         ) => ToJSON (TaggedM (Descr cfg s)) where
+    toJSON (TaggedM v) = toJSON (TaggedM v :: TaggedM cfg)
+
 -- | @instance ToJSON List@
 instance ( t ~ ToConfig cfg Maybe
          , ToJSON (TaggedM cfg)
@@ -271,6 +272,14 @@ instance (FromJSON (TaggedM cfg), KnownSymbol s) => FromJSON (TaggedM (Label s c
           key = cs $ symbolVal (Proxy :: Proxy s)
           parseJSON' :: Value -> Yaml.Parser (TaggedM cfg) = parseJSON
     parseJSON bad = fail $ "when expecting 'Label', encountered this instead: " ++ show bad
+
+instance ( ToConfig (Descr cfg s) Maybe ~ ToConfig cfg Maybe
+         , FromJSON (TaggedM cfg)
+         ) => FromJSON (TaggedM (Descr cfg s)) where
+    parseJSON v = cast <$> parseJSON v
+      where
+        cast :: TaggedM cfg -> TaggedM (Descr cfg s)
+        cast = TaggedM . fromTaggedM
 
 -- | @instance ParseJSON List@
 instance (FromJSON (TaggedM cfg)) => FromJSON (TaggedM (List cfg)) where
@@ -325,6 +334,14 @@ instance (KnownSymbol path, HasParseShellEnv a) => HasParseShellEnv (Label path 
             (key', s@"")        | mk key == mk key' -> Just (s, v)
             (key', '_':s@(_:_)) | mk key == mk key' -> Just (s, v)
             _                                       -> Nothing
+
+instance ( ToConfig (Descr cfg s) Maybe ~ ToConfig cfg Maybe
+         , HasParseShellEnv cfg
+         ) => HasParseShellEnv (Descr cfg s) where
+    parseShellEnv env = cast <$> parseShellEnv env
+      where
+        cast :: TaggedM cfg -> TaggedM (Descr cfg s)
+        cast = TaggedM . fromTaggedM
 
 -- | You can provide a list value via the shell environment by
 -- providing a single element.  This element will be put into a list
@@ -422,6 +439,7 @@ type family ToVal (a :: ConfigCode *) (p :: [Symbol]) :: Maybe * where
     ToVal (Record a b) '[]       = Just (ToConfig (Record a b) Id)
     ToVal (Record a b) ps        = OrElse (ToVal a ps) (ToVal b ps)
     ToVal (Label p a)  (p ': ps) = ToVal a ps
+    ToVal (Descr a s)  ps        = ToVal a ps
     ToVal (Option a)   ps        = ToValueMaybe (ToVal a ps)
     ToVal a            '[]       = Just (ToConfig a Id)
     ToVal a            (p ': ps) = Nothing
@@ -493,6 +511,15 @@ instance ( cfg ~ Label p cfg'
          , KnownSymbol p
          ) => Sel (Label p cfg') (p ': ps) where
     sel (Tagged (Id a)) Proxy = sel (Tagged a :: Tagged cfg') (Proxy :: Proxy ps)
+
+instance ( cfg ~ Descr cfg' s
+         , Sel cfg' ps
+         , ToConfig (Descr cfg' s) Id ~ ToConfig cfg' Id
+         ) => Sel (Descr cfg' s) ps where
+    sel = sel . cast
+      where
+        cast :: Tagged (Descr cfg' s) -> Tagged cfg'
+        cast = Tagged . fromTagged
 
 instance ( cfg ~ Option cfg'
          , NothingValue (ToVal cfg' ps)
@@ -583,6 +610,23 @@ instance (Monoid (TaggedM a)) => Monoid (TaggedM (Label s a)) where
         tagA :: ToConfig a Maybe -> TaggedM a
         tagA = TaggedM
 
+instance ( ToConfig (Descr a s) Maybe ~ ToConfig a Maybe
+         , ToConfig a Maybe ~ Maybe a'
+         , Monoid (TaggedM a)
+         ) => Monoid (TaggedM (Descr a s)) where
+    mempty = cast $ TaggedM Nothing
+      where
+        cast :: TaggedM a -> TaggedM (Descr a s)
+        cast = TaggedM . fromTaggedM
+
+    mappend x x' = cast $ cast' x <> cast' x'
+      where
+        cast :: TaggedM a -> TaggedM (Descr a s)
+        cast' :: TaggedM (Descr a s) -> TaggedM a
+
+        cast = TaggedM . fromTaggedM
+        cast' = TaggedM . fromTaggedM
+
 -- | There is no @instance Monoid (TaggedM (Type a))@, since there
 -- is no reasonable 'mempty'.  Therefore, we offer a specialized
 -- instance for labels that map to 'Type'.
@@ -633,6 +677,13 @@ instance (KnownSymbol s, Freeze t) => Freeze (Label s t) where
 
     thw Proxy (Id x) = Just $ thw (Proxy :: Proxy t) x
 
+instance ( ToConfig (Descr t s) Maybe ~ ToConfig t Maybe
+         , ToConfig (Descr t s) Id ~ ToConfig t Id
+         , Freeze t
+         ) => Freeze (Descr t s) where
+    frz Proxy path x = frz (Proxy :: Proxy t) path x
+    thw Proxy = thw (Proxy :: Proxy t)
+
 instance (Freeze c) => Freeze (List c) where
     frz Proxy path xs = sequence $ frz (Proxy :: Proxy c) path <$> xs
     thw Proxy xs = thw (Proxy :: Proxy c) <$> xs
@@ -666,6 +717,9 @@ instance Freeze (Type c) where
     thw Proxy x = x
 
 
+-- | Partials are constructed with every 'Nothing' spelled out,
+-- resulting in deep skeletons of 'Nothing's.  'CanonicalizePartial'
+-- replaces those with single 'Nothing's at their tops.
 class CanonicalizePartial a where
     canonicalizePartial :: TaggedM a -> TaggedM a
     emptyPartial :: TaggedM a -> Bool
@@ -692,6 +746,21 @@ instance (cfg ~ Label s cfg', CanonicalizePartial cfg')
 
     emptyPartial (TaggedM Nothing) = True
     emptyPartial (TaggedM (Just a)) = emptyPartial (TaggedM a :: TaggedM cfg')
+
+instance (cfg ~ Descr cfg' s, CanonicalizePartial cfg')
+        => CanonicalizePartial (Descr cfg' s) where
+    canonicalizePartial = cast . canonicalizePartial . cast'
+      where
+        cast :: TaggedM a -> TaggedM (Descr a s)
+        cast' :: TaggedM (Descr a s) -> TaggedM a
+
+        cast = TaggedM . fromTaggedM
+        cast' = TaggedM . fromTaggedM
+
+    emptyPartial = emptyPartial . cast
+      where
+        cast :: TaggedM (Descr a s) -> TaggedM a
+        cast = TaggedM . fromTaggedM
 
 instance (cfg ~ List cfg', CanonicalizePartial cfg')
         => CanonicalizePartial (List cfg') where
