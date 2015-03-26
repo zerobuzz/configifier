@@ -22,7 +22,6 @@ where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
 import Control.Exception (Exception)
-import Data.Aeson (ToJSON, FromJSON, Value(Object, Null), object, toJSON, (.=))
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
@@ -32,10 +31,9 @@ import Data.Maybe (catMaybes)
 import Data.Monoid (Monoid, (<>), mempty, mappend, mconcat)
 import Data.String.Conversions (ST, SBS, cs)
 import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
+import Data.Yaml (ToJSON, FromJSON, Value(Object, Array, Null), object, toJSON, parseJSON, (.=))
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 
-import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.Types as Aeson
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Vector as Vector
 import qualified Data.Yaml as Yaml
@@ -229,9 +227,9 @@ instance ( ToJSON (TaggedM cfg)
          , KnownSymbol s
          )
         => ToJSON (TaggedM (Label s cfg)) where
-    toJSON (TaggedM Nothing) = Aeson.Null
+    toJSON (TaggedM Nothing) = Null
     toJSON (TaggedM (Just v)) = case toJSON (TaggedM v :: TaggedM cfg) of
-        Aeson.Null -> Aeson.Null
+        Null -> Null
         val        -> object [key .= val]  where key = cs $ symbolVal (Proxy :: Proxy s)
 
 -- | @instance ToJSON List@
@@ -247,7 +245,7 @@ instance ( t ~ ToConfig cfg Maybe
          , ToJSON (TaggedM cfg)
          ) => ToJSON (TaggedM (Option cfg)) where
     toJSON (TaggedM (JustO v)) = toJSON $ (TaggedM v :: TaggedM cfg)
-    toJSON (TaggedM NothingO)  = Aeson.Null
+    toJSON (TaggedM NothingO)  = Null
 
 -- | @instance ToJSON Type@
 instance (ToJSON a) => ToJSON (TaggedM (Type a)) where
@@ -259,36 +257,38 @@ instance (ToJSON a) => ToJSON (TaggedM (Type a)) where
 -- | @instance FromJSON Record@
 instance (FromJSON (TaggedM cfg1), FromJSON (TaggedM cfg2)) => FromJSON (TaggedM (Record cfg1 cfg2)) where
     parseJSON json = do
-        TaggedM o1 :: TaggedM cfg1 <- Aeson.parseJSON json
-        TaggedM o2 :: TaggedM cfg2 <- Aeson.parseJSON json
+        TaggedM o1 :: TaggedM cfg1 <- parseJSON json
+        TaggedM o2 :: TaggedM cfg2 <- parseJSON json
         return . TaggedM $ o1 :*> o2
 
 -- | @instance FromJSON Label@ (tolerates unknown fields in json object.)
 instance (FromJSON (TaggedM cfg), KnownSymbol s) => FromJSON (TaggedM (Label s cfg)) where
-    parseJSON = Aeson.withObject "configifier object" $ \ m ->
-          case HashMap.lookup key m of
+    parseJSON (Object hashmap) =
+          case HashMap.lookup key hashmap of
             (Just json) -> TaggedM . Just . fromTaggedM <$> parseJSON' json
             Nothing     -> return $ TaggedM Nothing
         where
           key = cs $ symbolVal (Proxy :: Proxy s)
-          parseJSON' :: Aeson.Value -> Aeson.Parser (TaggedM cfg) = Aeson.parseJSON
+          parseJSON' :: Value -> Yaml.Parser (TaggedM cfg) = parseJSON
+    parseJSON bad = fail $ "when expecting 'Label', encountered this instead: " ++ show bad
 
 -- | @instance ParseJSON List@
 instance (FromJSON (TaggedM cfg)) => FromJSON (TaggedM (List cfg)) where
-    parseJSON = Aeson.withArray "configifier list" $ \ vector -> do
-        vector' :: [TaggedM cfg] <- sequence $ Aeson.parseJSON <$> Vector.toList vector
+    parseJSON (Array vector) = do
+        vector' :: [TaggedM cfg] <- sequence $ parseJSON <$> Vector.toList vector
         return . TaggedM . (fromTaggedM <$>) $ vector'
+    parseJSON bad = fail $ "when expecting 'List', encountered this instead: " ++ show bad
 
 -- | @instance ParseJSON Option@
 instance (FromJSON (TaggedM cfg)) => FromJSON (TaggedM (Option cfg)) where
     parseJSON Null = return (TaggedM NothingO :: TaggedM (Option cfg))
     parseJSON v = do
-        TaggedM js :: TaggedM cfg <- Aeson.parseJSON v
+        TaggedM js :: TaggedM cfg <- parseJSON v
         return $ (TaggedM (JustO js) :: TaggedM (Option cfg))
 
 -- | @instance FromJSON Type@
 instance (FromJSON a) => FromJSON (TaggedM (Type a)) where
-    parseJSON = (TaggedM <$>) . Aeson.parseJSON
+    parseJSON = (TaggedM <$>) . parseJSON
 
 
 -- * shell env
