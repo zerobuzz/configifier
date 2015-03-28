@@ -47,8 +47,7 @@ miscSpec = do
     it "descriptions" $
         let text :: SBS
             want :: ( c ~ ToConfigCode ("bla" :> Int :>: "describe stuff!")
-                    , c' ~ NoDesc c
-                    ) => Tagged c'
+                    ) => Tagged c
 
             text = "bla: 3"
             want = Tagged $ Id 3
@@ -127,8 +126,7 @@ miscSpec = do
     it "lists" $
         let text :: SBS
             want :: ( c ~ ToConfigCode ("bla" :> [Bool])
-                    , c' ~ NoDesc c
-                    ) => Tagged c'
+                    ) => Tagged c
 
             text = "bla: [yes, no]"
             want = Tagged $ Id [True, False]
@@ -234,10 +232,10 @@ selectSpec = do
 
     it "partial select paths and non-leaf sub-configs" $
         let t :: forall config config' ponfig ponfig' .
-                    ( config ~ Tagged (NoDesc (ToConfigCode config'))
+                    ( config ~ Tagged (ToConfigCode config')
                     , config' ~ (Maybe ("a" :> ST) :*> ("b" :> ST))
 
-                    , ponfig ~ Tagged (NoDesc (ToConfigCode ponfig'))
+                    , ponfig ~ Tagged (ToConfigCode ponfig')
                     , ponfig' ~ ("c" :> config')
 
                     ) => IO ()
