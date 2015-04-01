@@ -16,10 +16,10 @@ what's this, then?
   [Configurator](https://hackage.haskell.org/package/configurator),
   [optparse-applicative](https://hackage.haskell.org/package/optparse-applicative),
   [cmdargs](https://hackage.haskell.org/package/cmdargs).  (also
-  noteworthy:
+  note-worthy:
   [multiarg](https://hackage.haskell.org/package/multiarg),
-  [yaml-config](https://hackage.haskell.org/package/yaml-config).
-  please let me know what other package i missed.)
+  [yaml-config](https://hackage.haskell.org/package/yaml-config).  let
+  me know what i've missed.)
 
 - it is inspired by
   [servant](https://hackage.haskell.org/package/servant) in its use of
