@@ -419,7 +419,7 @@ instance (HasParseShellEnv cfg) => HasParseCommandLine cfg where
     parseCommandLine = primitiveParseCommandLine
 
 
--- | Very basic fist approach: read @/--(key)(=|\s+)(value)/@;
+-- | Very basic first approach: read @/--(key)(=|\s+)(value)/@;
 -- construct shell env from keys and names, and use 'parseShellEnv' on
 -- the command line.  If it doesn't like the syntax used in the
 -- command line, it will crash.  I hope for this to get much fancier
