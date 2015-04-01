@@ -20,8 +20,8 @@
 module Data.Configifier
 where
 
-import Control.Applicative ((<$>), (<*>), (<|>))
-import Control.Exception (Exception)
+import Control.Applicative ((<$>), (<|>))
+import Control.Exception (Exception, throwIO)
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
@@ -32,6 +32,7 @@ import Data.Monoid (Monoid, (<>), mempty, mappend, mconcat)
 import Data.String.Conversions (ST, SBS, cs)
 import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
 import Data.Yaml (ToJSON, FromJSON, Value(Object, Array, Null), object, toJSON, parseJSON, (.=))
+import Data.Yaml.Include (decodeFileEither)
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 
 import qualified Data.HashMap.Strict as HashMap
@@ -105,7 +106,8 @@ data Id a = Id a
 -- * sources
 
 data Source =
-      ConfigFileYaml SBS
+      YamlString SBS
+    | YamlFile FilePath
     | ShellEnv [(String, String)]
     | CommandLine [String]
   deriving (Eq, Ord, Show, Typeable)
@@ -140,12 +142,14 @@ instance (Show (ToConfig cfg Maybe)) => Show (TaggedM cfg) where
 
 -- * results and errors
 
-type Result cfg = Either Error (Tagged cfg)
-
 data Error =
-      InvalidYaml
+      InvalidYamlString
         { invalidYamlInput :: SBS
-        , invalidYamlMsg :: String
+        , invalidYamlMsg :: Yaml.ParseException
+        }
+    | InvalidYamlFile
+        { invalidYamlFile :: FilePath
+        , invalidYamlMsg :: Yaml.ParseException
         }
     | ShellEnvNil
     | ShellEnvNoParse
@@ -158,7 +162,7 @@ data Error =
     | FreezeIncomplete
         { freezeIncompleteAtPath :: [String]
         }
-  deriving (Eq, Ord, Show, Typeable)
+  deriving (Show, Typeable)
 
 instance Exception Error
 
@@ -174,10 +178,10 @@ configify :: forall cfg tm .
       , HasParseShellEnv cfg
       , HasParseCommandLine cfg
       , CanonicalizePartial cfg
-      ) => [Source] -> Result cfg
-configify = configify' (mempty :: tm)
+      ) => [Source] -> IO (Tagged cfg)
+configify = configifyWithDefault (mempty :: tm)
 
-configify' :: forall cfg tm .
+configifyWithDefault :: forall cfg tm .
       ( tm ~ TaggedM cfg
       , Show tm
       , Monoid tm
@@ -186,19 +190,48 @@ configify' :: forall cfg tm .
       , HasParseShellEnv cfg
       , HasParseCommandLine cfg
       , CanonicalizePartial cfg
-      ) => tm -> [Source] -> Result cfg
-configify' def sources = sequence (get <$> sources) >>= merge . (def:)
+      ) => tm -> [Source] -> IO (Tagged cfg)
+configifyWithDefault def sources = sequence (get <$> readUserConfigFiles sources) >>= run . merge . (def:)
   where
-    get :: Source -> Either Error tm
-    get (ConfigFileYaml sbs) = parseConfigFile sbs
-    get (ShellEnv env)       = parseShellEnv env
-    get (CommandLine args)   = parseCommandLine args
+    run :: Either Error a -> IO a
+    run = either throwIO return
+
+    get :: Source -> IO tm
+    get (YamlString sbs)     = run $ parseConfigFile sbs
+    get (YamlFile fpath)     = parseConfigFileWithIncludes fpath >>= run
+    get (ShellEnv env)       = run $ parseShellEnv env
+    get (CommandLine args)   = run $ parseCommandLine args
+
+
+-- * process --config
+
+-- | Handle `--config=<FILE>`, `--config <FILE>`: split up
+-- 'CommandLine' source on each of these, and inject a
+-- 'YamlFile' source with the resp. file name.
+readUserConfigFiles :: [Source] -> [Source]
+readUserConfigFiles = mconcat . map f
+  where
+    f :: Source -> [Source]
+    f s@(YamlString _)   = [s]
+    f s@(YamlFile _)     = [s]
+    f s@(ShellEnv _)     = [s]
+    f (CommandLine args) = filter (not . (== CommandLine [])) $ g [] args
+
+    g :: [String] -> [String] -> [Source]
+    g acc [] = [CommandLine (reverse acc)]
+    g acc fresh@(freshHead:freshTail) = case popArg fresh of
+        Right (("config", v), fresh') -> CommandLine (reverse acc) : YamlFile v : g [] fresh'
+        _ -> g (freshHead : acc) freshTail
 
 
 -- * yaml / json
 
 parseConfigFile :: (FromJSON (TaggedM cfg)) => SBS -> Either Error (TaggedM cfg)
-parseConfigFile sbs = mapLeft (InvalidYaml sbs) $ Yaml.decodeEither sbs
+parseConfigFile sbs = mapLeft (InvalidYamlString sbs) $ Yaml.decodeEither' sbs
+
+-- | See "Data.Yaml.Include".
+parseConfigFileWithIncludes :: (FromJSON (TaggedM cfg)) => FilePath -> IO (Either Error (TaggedM cfg))
+parseConfigFileWithIncludes fpath = mapLeft (InvalidYamlFile fpath) <$> decodeFileEither fpath
 
 renderConfigFile :: (Freeze cfg, t ~ Tagged cfg, ToJSON (TaggedM cfg)) => t -> SBS
 renderConfigFile = Yaml.encode . thaw
@@ -400,18 +433,22 @@ primitiveParseCommandLine args =
 
 parseArgs :: Args -> Either String Env
 parseArgs [] = Right []
-parseArgs (h:[]) = parseArgsWithEqSign h
-parseArgs (h:h':t) = ((++) <$> parseArgsWithEqSign h   <*> parseArgs (h':t))
-                 <|> ((++) <$> parseArgsWithSpace h h' <*> parseArgs t)
+parseArgs args = popArg args >>= \ ((k, v), args') -> ((parseArgName k, v):) <$> parseArgs args'
 
-parseArgsWithEqSign :: String -> Either String Env
+popArg :: Args -> Either String ((String, String), Args)
+popArg []       = Left "empty argument list."
+popArg (h:[])   = (, []) <$> parseArgsWithEqSign h
+popArg (h:h':t) = ((, h':t) <$> parseArgsWithEqSign h)
+              <|> ((,    t) <$> parseArgsWithSpace h h')
+
+parseArgsWithEqSign :: String -> Either String (String, String)
 parseArgsWithEqSign s = case cs s Regex.=~- "^--([^=]+)=(.*)$" of
-    [_, k, v] -> Right [(parseArgName $ cs k, cs v)]
+    [_, k, v] -> Right (cs k, cs v)
     bad -> Left $ "could not parse last arg: " ++ show (s, bad)
 
-parseArgsWithSpace :: String -> String -> Either String Env
+parseArgsWithSpace :: String -> String -> Either String (String, String)
 parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
-    [_, k] -> Right [(parseArgName $ cs k, cs v)]
+    [_, k] -> Right (cs k, cs v)
     bad -> Left $ "could not parse long-arg with value: " ++ show (s, v, bad)
 
 parseArgName :: String -> String

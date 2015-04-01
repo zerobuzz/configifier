@@ -31,6 +31,7 @@ spec = describe "Configifier" $ do
     selectSpec
     mergeSpec
     sourcesSpec
+    readUserConfigFilesSpec
 
 miscSpec :: Spec
 miscSpec = do
@@ -64,13 +65,13 @@ miscSpec = do
          in run text want
 
     it "option, no sources" $
-        let have :: (c ~ ToConfigCode (Maybe ("bla" :> Int))) => Configifier.Result c
+        let have :: (c ~ ToConfigCode (Maybe ("bla" :> Int))) => IO (Tagged c)
             want :: (c ~ ToConfigCode (Maybe ("bla" :> Int))) => Tagged c
 
             have = configify []
             want = Tagged NothingO
 
-         in have `shouldBe` Right want
+         in have >>= (`shouldBe` want)
 
     it "yaml cannot parse empty cfg files (even if all config data is optional!)" $
         let text1, text2, text3 :: SBS
@@ -147,11 +148,11 @@ run :: forall cfg tm ti .
       , CanonicalizePartial cfg
       ) => SBS -> ti -> IO ()
 run text parsedWant = do
-    let f :: SBS -> Either Error ti
-        f sbs = configify [ConfigFileYaml sbs]
+    let f :: SBS -> IO ti
+        f sbs = configify [YamlString sbs]
 
-    f text `shouldBe` Right parsedWant
-    f (renderConfigFile parsedWant) `shouldBe` Right parsedWant
+    f text                          >>= (`shouldBe` parsedWant)
+    f (renderConfigFile parsedWant) >>= (`shouldBe` parsedWant)
 
 
 selectSpec :: Spec
@@ -240,14 +241,14 @@ selectSpec = do
 
                     ) => IO ()
             t = do
-                  let Right (cfg1 :: ponfig) = configify [ConfigFileYaml . cs . unlines $
+                  cfg1 :: ponfig <- configify [YamlString . cs . unlines $
                           "c:" :
                           "  a: goih" :
                           "  b: c38" :
                           "..." :
                           []]
 
-                      Right (Tagged cfg2 :: config) = configify [ConfigFileYaml . cs . unlines $
+                  Tagged cfg2 :: config <- configify [YamlString . cs . unlines $
                           "a: goih" :
                           "b: c38" :
                           "..." :
@@ -302,10 +303,10 @@ sourcesSpec = describe "sources" $
     let f :: ( c  ~ ToConfigCode c'
              , c' ~ ("frontend" :> sc :*> Maybe ("backend" :> sc))
              , sc ~ ("bind_port" :> Int :*> Maybe ("expose_host" :> ST))
-             ) => [Source] -> Result c
+             ) => [Source] -> IO (Tagged c)
         f = configify
 
-        configFile1 :: Source = ConfigFileYaml . cs . unlines $
+        configFile1 :: Source = YamlString . cs . unlines $
               "frontend:" :
               "  bind_port: 3" :
               "  expose_host: host" :
@@ -313,7 +314,7 @@ sourcesSpec = describe "sources" $
               "  bind_port: 4" :
               "  expose_host: hist" :
               []
-        configFile2 :: Source = ConfigFileYaml . cs . unlines $
+        configFile2 :: Source = YamlString . cs . unlines $
               "frontend:" :
               "  bind_port: 3" :
               []
@@ -329,21 +330,35 @@ sourcesSpec = describe "sources" $
             parseArgs (["--arg=31", "--flob", "gluh"] :: Args) `shouldBe` Right ([("ARG", "31"), ("FLOB", "gluh")] :: Env)
 
         it "1" $
-            f [configFile1] `shouldBe`
-                (Right . Tagged $ Id (Id 3 :*> JustO (Id "host"))
-                               :*> JustO (Id (Id 4 :*> JustO (Id "hist"))))
+            f [configFile1] >>= (`shouldBe`
+                (Tagged $ Id (Id 3 :*> JustO (Id "host"))
+                      :*> JustO (Id (Id 4 :*> JustO (Id "hist")))))
 
         it "2" $
-            f [configFile1, shellEnv1, shellEnv2] `shouldBe`
-                (Right . Tagged $ Id (Id 18 :*> JustO (Id "host"))
-                               :*> JustO (Id (Id 4 :*> JustO (Id "bom"))))
+            f [configFile1, shellEnv1, shellEnv2] >>= (`shouldBe`
+                (Tagged $ Id (Id 18 :*> JustO (Id "host"))
+                      :*> JustO (Id (Id 4 :*> JustO (Id "bom")))))
 
         it "3" $
-            f [configFile1, shellEnv1, shellEnv2, commandLine1] `shouldBe`
-                (Right . Tagged $ Id (Id 31 :*> JustO (Id "host"))
-                               :*> JustO (Id (Id 4 :*> JustO (Id "bom"))))
+            f [configFile1, shellEnv1, shellEnv2, commandLine1] >>= (`shouldBe`
+                (Tagged $ Id (Id 31 :*> JustO (Id "host"))
+                      :*> JustO (Id (Id 4 :*> JustO (Id "bom")))))
 
         it "4" $
-            f [configFile2, commandLine2] `shouldBe`
-                (Right . Tagged $ Id (Id 3 :*> NothingO)
-                               :*> JustO (Id (Id 8710 :*> JustO (Id "mab"))))
+            f [configFile2, commandLine2] >>= (`shouldBe`
+                (Tagged $ Id (Id 3 :*> NothingO)
+                      :*> JustO (Id (Id 8710 :*> JustO (Id "mab")))))
+
+
+readUserConfigFilesSpec :: Spec
+readUserConfigFilesSpec = describe "readUserConfigFiles" $ do
+    it "finds --config args" $
+        readUserConfigFiles [CommandLine ["--config=FILE"]] `shouldBe` [YamlFile "FILE"]
+
+    it "keeps surrounding args intact" $ do
+        readUserConfigFiles [CommandLine ["1", "2", "--config=FILE", "3", "4"]] `shouldBe`
+            [CommandLine ["1", "2"], YamlFile "FILE", CommandLine ["3", "4"]]
+        readUserConfigFiles [CommandLine ["--config=FILE", "2"]] `shouldBe`
+            [YamlFile "FILE", CommandLine ["2"]]
+        readUserConfigFiles [CommandLine ["1", "--config=FILE"]] `shouldBe`
+            [CommandLine ["1"], YamlFile "FILE"]

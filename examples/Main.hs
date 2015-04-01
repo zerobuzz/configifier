@@ -17,8 +17,7 @@ module Main
 where
 
 import Control.Applicative ((<$>))
-import Control.Exception (throwIO)
-import Data.String.Conversions (ST, cs)
+import Data.String.Conversions (ST, cs, (<>))
 import Data.Typeable (Proxy(Proxy))
 import System.Environment (getEnvironment, getArgs)
 import Text.Show.Pretty (ppShow)
@@ -31,20 +30,19 @@ import Data.Configifier
 
 -- * an interesting example
 
-type CfgDesc = ToConfigCode Cfg'
-type Cfg = NoDesc (ToConfigCode Cfg')
+type Cfg = ToConfigCode Cfg'
 type Cfg' =
              "frontend"      :> ServerCfg' :>: "descr"
   :*> Maybe ("backend"       :> ServerCfg')
   :*>        "default_users" :> [UserCfg'] :>: "list of users that are created on start if database is empty"
 
-type ServerCfg = NoDesc (ToConfigCode ServerCfg')
+type ServerCfg = ToConfigCode ServerCfg'
 type ServerCfg' =
              "bind_port"   :> Int
   :*>        "bind_host"   :> ST
   :*> Maybe ("expose_host" :> ST)
 
-type UserCfg = NoDesc (ToConfigCode UserCfg')
+type UserCfg = ToConfigCode UserCfg'
 type UserCfg' =
              "name"     :> ST :>: "user name (must be unique)"
   :*>        "email"    :> ST :>: "email address (must also be unique)"
@@ -64,12 +62,12 @@ defaultCfg = Tagged $
 main :: IO ()
 main = do
     sources <- sequence
-        [ ConfigFileYaml <$> SBS.readFile "examples/config.yaml"
-        , ShellEnv       <$> getEnvironment
-        , CommandLine    <$> getArgs
+        [ YamlString  <$> SBS.readFile "examples/config.yaml"
+        , ShellEnv    <$> getEnvironment
+        , CommandLine <$> getArgs
         ]
 
-    ST.putStrLn $ docs (Proxy :: Proxy CfgDesc)
+    ST.putStrLn $ docs (Proxy :: Proxy Cfg) <> "\n\n"
 
     let dump cfg = do
             putStrLn $ ppShow cfg
@@ -77,15 +75,13 @@ main = do
 
     dump defaultCfg
 
-    case configify sources :: Result Cfg of
-        Left e -> throwIO e
-        Right cfg -> do
-            dump cfg
+    cfg :: Tagged Cfg <- configify sources
+    dump cfg
 
-            putStrLn "accessing config values:"
-            print $ (Tagged (cfg >>. (Proxy :: Proxy '["frontend"])) :: Tagged ServerCfg)
-            print $ cfg >>. (Proxy :: Proxy '["frontend", "expose_host"])
-            print $ cfg >>. (Proxy :: Proxy '["frontend", "bind_port"])
+    putStrLn "accessing config values:"
+    print $ (Tagged (cfg >>. (Proxy :: Proxy '["frontend"])) :: Tagged ServerCfg)
+    print $ cfg >>. (Proxy :: Proxy '["frontend", "expose_host"])
+    print $ cfg >>. (Proxy :: Proxy '["frontend", "bind_port"])
 
 
 {-
@@ -123,5 +119,12 @@ accessing config values:
 (Tagged Id 8001 :*> (Id "localhost" :*> JustO (Id "false")))
 Just "false"
 8001
+
+$ configifier-example --config examples/config2.yaml
+[...]
+backend:
+  bind_host: arrr
+  bind_port: 281
+[...]
 
 -}
