@@ -18,8 +18,9 @@ what's this, then?
   [cmdargs](https://hackage.haskell.org/package/cmdargs).  (also
   note-worthy:
   [multiarg](https://hackage.haskell.org/package/multiarg),
-  [yaml-config](https://hackage.haskell.org/package/yaml-config).  let
-  me know what i've missed.)
+  [yaml-config](https://hackage.haskell.org/package/yaml-config),
+  [getopt-generics](https://hackage.haskell.org/package/getopt-generics).
+  let me know what i've missed.)
 
 - it is inspired by
   [servant](https://hackage.haskell.org/package/servant) in its use of
