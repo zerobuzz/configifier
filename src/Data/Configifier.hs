@@ -31,9 +31,10 @@ import Data.Maybe (catMaybes)
 import Data.Monoid (Monoid, (<>), mempty, mappend, mconcat)
 import Data.String.Conversions (ST, SBS, cs)
 import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
-import Data.Yaml (ToJSON, FromJSON, Value(Object, Array, Null), object, toJSON, parseJSON, (.=))
 import Data.Yaml.Include (decodeFileEither)
+import Data.Yaml (ToJSON, FromJSON, Value(Object, Array, Null), object, toJSON, parseJSON, (.=))
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
+import System.Environment (getEnvironment, getArgs, getProgName)
 
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Vector as Vector
@@ -201,6 +202,27 @@ configifyWithDefault def sources = sequence (get <$> readUserConfigFiles sources
     get (YamlFile fpath)     = parseConfigFileWithIncludes fpath >>= run
     get (ShellEnv env)       = run $ parseShellEnv env
     get (CommandLine args)   = run $ parseCommandLine args
+
+
+-- * IO
+
+-- | From a list of config file paths, construct a source list that
+-- (1) reads those files allowing for recursive includes; then (2)
+-- processes shell environment variables (with `getProgName` as
+-- prefix), and finally (3) processes command line args, turning
+-- @--config@ arguments into further recursive config file loads.
+defaultSources :: [FilePath] -> IO [Source]
+defaultSources filePaths = do
+    let files = YamlFile <$> filePaths
+    env  <- ShellEnv     <$> (getEnvironment >>= withShellEnvPrefix)
+    args <- CommandLine  <$> getArgs
+    return $ files ++ [env] ++ readUserConfigFiles [args]
+
+-- | Require that all shell env variables start with executable name.
+-- (This is just a call to 'requireShellEnvPrefix'' with the result of
+-- 'progName'.)
+withShellEnvPrefix :: Env -> IO Env
+withShellEnvPrefix env = (`withShellEnvPrefix'` env) <$> getProgName
 
 
 -- * corner cases
