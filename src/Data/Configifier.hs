@@ -26,7 +26,7 @@ import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
 import Data.Function (on)
-import Data.List (nubBy, intercalate)
+import Data.List (nubBy, intercalate, isPrefixOf)
 import Data.Maybe (catMaybes)
 import Data.Monoid (Monoid, (<>), mempty, mappend, mconcat)
 import Data.String.Conversions (ST, SBS, cs)
@@ -203,7 +203,7 @@ configifyWithDefault def sources = sequence (get <$> readUserConfigFiles sources
     get (CommandLine args)   = run $ parseCommandLine args
 
 
--- * process --config
+-- * corner cases
 
 -- | Handle `--config=<FILE>`, `--config <FILE>`: split up
 -- 'CommandLine' source on each of these, and inject a
@@ -222,6 +222,16 @@ readUserConfigFiles = mconcat . map f
     g acc fresh@(freshHead:freshTail) = case popArg fresh of
         Right (("config", v), fresh') -> CommandLine (reverse acc) : YamlFile v : g [] fresh'
         _ -> g (freshHead : acc) freshTail
+
+-- | Require prefix for shell env variables.  This function will chop
+-- off the given prefix of all env entries, and filter all entries
+-- that do not have this prefix.
+withShellEnvPrefix' :: String -> Env -> Env
+withShellEnvPrefix' prefix = catMaybes . map f
+  where
+    f (k, v) = if prefix `isPrefixOf` k
+        then Just (take (length prefix) k, v)
+        else Nothing
 
 
 -- * yaml / json
