@@ -227,6 +227,13 @@ withShellEnvPrefix env = (`withShellEnvPrefix'` env) <$> getProgName
 
 -- * corner cases
 
+-- FUTURE WORK: the functions in this section operate on sources, not
+-- parsers.  This has the unintended effect of leaving the
+-- documentation functionality oblivious of what happens here, so the
+-- user of the apliation that uses configifier has no way of knowing
+-- about '--config' or the program name prefix of shell env variables.
+-- there should be a better way.
+
 -- | Handle `--config=<FILE>`, `--config <FILE>`: split up
 -- 'CommandLine' source on each of these, and inject a
 -- 'YamlFile' source with the resp. file name.
