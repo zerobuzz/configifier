@@ -1,0 +1,14 @@
+-*- mode: text -*-
+
+0.0.4 (2015-05-15):
+
+      Include sub-configs; honour --config arg on cli.
+      Deprecate NoDesc type family
+      Shell env variable name prefices (hack).
+      Default sources.
+      Less noisy errors.
+      `configify` throws exceptions rather than returning `Result` type.
+
+0.0.3 (old):
+
+      basic functionality.
