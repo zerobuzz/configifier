@@ -36,6 +36,7 @@ import Data.Yaml (ToJSON, FromJSON, Value(Object, Array, Null), object, toJSON, 
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import System.Environment (getEnvironment, getArgs, getProgName)
 
+import qualified Data.ByteString as SBS
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Vector as Vector
 import qualified Data.Yaml as Yaml
@@ -266,7 +267,10 @@ withShellEnvPrefix' prefix = catMaybes . map f
 -- * yaml / json
 
 parseConfigFile :: (FromJSON (TaggedM cfg)) => SBS -> Either Error (TaggedM cfg)
-parseConfigFile sbs = mapLeft (InvalidYamlString sbs) $ Yaml.decodeEither' sbs
+parseConfigFile sbs = mapLeft (InvalidYamlString (trunc sbs)) $ Yaml.decodeEither' sbs
+  where
+    l = 21
+    trunc s = if SBS.length s > l then SBS.take l s <> "..." else s
 
 -- | See "Data.Yaml.Include".
 parseConfigFileWithIncludes :: (FromJSON (TaggedM cfg)) => FilePath -> IO (Either Error (TaggedM cfg))
