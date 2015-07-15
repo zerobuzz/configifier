@@ -1,5 +1,9 @@
 -*- mode: text -*-
 
+0.0.4 (2015-07-15):
+
+      relax version bounds.
+
 0.0.4 (2015-05-15):
 
       Include sub-configs; honour --config arg on cli.
