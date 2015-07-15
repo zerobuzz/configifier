@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds                                #-}
+{-# LANGUAGE LambdaCase                               #-}
 {-# LANGUAGE OverlappingInstances                     #-}
 {-# LANGUAGE OverloadedStrings                        #-}
 {-# LANGUAGE TypeOperators                            #-}
@@ -9,6 +10,7 @@
 module Data.ConfigifierSpec
 where
 
+import Control.Exception
 import Data.Either
 import Data.Monoid
 import Data.Proxy
@@ -32,6 +34,8 @@ spec = describe "Configifier" $ do
     mergeSpec
     sourcesSpec
     readUserConfigFilesSpec
+    stringAsCharList
+
 
 miscSpec :: Spec
 miscSpec = do
@@ -362,3 +366,15 @@ readUserConfigFilesSpec = describe "readUserConfigFiles" $ do
             [YamlFile "FILE", CommandLine ["2"]]
         readUserConfigFiles [CommandLine ["1", "--config=FILE"]] `shouldBe`
             [CommandLine ["1"], YamlFile "FILE"]
+
+
+stringAsCharList :: Spec
+stringAsCharList = describe "a field of type String" $ do
+    it "somewhat unexpectedly fails when being presented a String" $
+        (configify [YamlString "x: wef\ny: ofs"]
+            :: IO (Tagged (ToConfigCode ("x" :> ST :*> "y" :> String))))
+          `shouldThrow` (\case (SomeException _) -> True)
+    it "wants a list of chars!" $ do
+        config :: Tagged (ToConfigCode ("x" :> ST :*> "y" :> String))
+            <- configify [YamlString "x: wef\ny:\n- o\n- f\n- s"]
+        config `shouldBe` (Tagged $ Id "wef" :*> Id "ofs")
