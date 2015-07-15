@@ -1,11 +1,11 @@
 {-# LANGUAGE DataKinds                                #-}
+{-# LANGUAGE GADTs                                    #-}
 {-# LANGUAGE LambdaCase                               #-}
 {-# LANGUAGE OverlappingInstances                     #-}
 {-# LANGUAGE OverloadedStrings                        #-}
-{-# LANGUAGE TypeOperators                            #-}
-{-# LANGUAGE ScopedTypeVariables                      #-}
 {-# LANGUAGE Rank2Types                               #-}
-{-# LANGUAGE GADTs                                    #-}
+{-# LANGUAGE ScopedTypeVariables                      #-}
+{-# LANGUAGE TypeOperators                            #-}
 
 module Data.ConfigifierSpec
 where
