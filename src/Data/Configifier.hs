@@ -9,8 +9,10 @@
 {-# LANGUAGE OverlappingInstances  #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE PolyKinds             #-}
+{-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
@@ -22,6 +24,7 @@ where
 
 import Control.Applicative ((<$>), (<|>))
 import Control.Exception (Exception, throwIO)
+import Data.ByteString.Char8 (pack)
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
@@ -34,7 +37,10 @@ import Data.Typeable (Typeable, Proxy(Proxy), typeOf)
 import Data.Yaml.Include (decodeFileEither)
 import Data.Yaml (ToJSON, FromJSON, Value(Object, Array, Null), object, toJSON, parseJSON, (.=))
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
+import Language.Haskell.TH.Quote (QuasiQuoter(..))
+import Language.Haskell.TH (runQ)
 import System.Environment (getEnvironment, getArgs, getProgName)
+import System.IO.Unsafe (unsafePerformIO)
 
 import qualified Data.ByteString as SBS
 import qualified Data.HashMap.Strict as HashMap
@@ -1004,3 +1010,14 @@ instance HasRenderDoc CommandLine where
         "variable, you can also set with a long arg.)" :
         "" :
         []
+
+
+-- * template haskell
+
+-- | QuasiQuoter for config files.
+cfgify :: QuasiQuoter
+cfgify = QuasiQuoter { quoteExp  = \x -> runQ [| unsafePerformIO $ configify [YamlString $ pack x] |]
+                     , quotePat  = error "cfgify: not application to Pat context"
+                     , quoteType = error "cfgify: not application to Type context"
+                     , quoteDec  = error "cfgify: not application to Dec context"
+                     }
