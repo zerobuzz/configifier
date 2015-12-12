@@ -1,5 +1,5 @@
 name:                configifier
-version:             0.0.6
+version:             0.0.7
 synopsis:            parser for config files, shell variables, command line args.
 description:         See <https://github.com/zerobuzz/configifier/blob/master/README.md README>
 license:             AGPL-3
@@ -36,7 +36,9 @@ library
     , bytestring >=0.10 && <0.11
     , case-insensitive >=1.2 && <1.3
     , containers >=0.5 && <0.6
+    , directory >=1.2 && <1.3
     , either >=4.3 && <4.5
+    , functor-infix >=0.0.3 && <0.1
     , mtl >=2.1 && <2.3
     , regex-easy >=0.1.0.0 && <0.2
     , safe >=0.3 && <0.4

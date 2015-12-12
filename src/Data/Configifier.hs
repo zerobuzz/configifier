@@ -24,11 +24,13 @@ where
 
 import Control.Applicative ((<$>), (<|>))
 import Control.Exception (Exception, throwIO)
+import Control.Monad (filterM)
 import Data.ByteString.Char8 (pack)
 import Data.CaseInsensitive (mk)
 import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
 import Data.Function (on)
+import Data.Functor.Infix ((<$$>))
 import Data.List (nubBy, intercalate, isPrefixOf)
 import Data.Maybe (catMaybes)
 import Data.Monoid (Monoid, (<>), mempty, mappend, mconcat)
@@ -39,6 +41,7 @@ import Data.Yaml (ToJSON, FromJSON, Value(Object, Array, Null), object, toJSON, 
 import GHC.TypeLits (Symbol, KnownSymbol, symbolVal)
 import Language.Haskell.TH.Quote (QuasiQuoter(..))
 import Language.Haskell.TH (runQ)
+import System.Directory (doesFileExist)
 import System.Environment (getEnvironment, getArgs, getProgName)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -218,11 +221,14 @@ configifyWithDefault def sources = sequence (get <$> readUserConfigFiles sources
 -- processes shell environment variables (with `getProgName` as
 -- prefix), and finally (3) processes command line args, turning
 -- @--config@ arguments into further recursive config file loads.
+--
+-- File path arguments are optiona; config paths to non-existent
+-- files are silently dropped.
 defaultSources :: [FilePath] -> IO [Source]
 defaultSources filePaths = do
-    let files = YamlFile <$> filePaths
-    env  <- ShellEnv     <$> (getEnvironment >>= withShellEnvPrefix)
-    args <- CommandLine  <$> getArgs
+    files <- YamlFile   <$$> filterM doesFileExist filePaths
+    env   <- ShellEnv    <$> (getEnvironment >>= withShellEnvPrefix)
+    args  <- CommandLine <$> getArgs
     return $ files ++ [env] ++ readUserConfigFiles [args]
 
 -- | Require that all shell env variables start with executable name.
