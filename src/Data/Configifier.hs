@@ -31,7 +31,7 @@ import Data.Char (toUpper)
 import Data.Either.Combinators (mapLeft)
 import Data.Function (on)
 import Data.Functor.Infix ((<$$>))
-import Data.List (nubBy, intercalate, isPrefixOf)
+import Data.List (nubBy, intercalate, isPrefixOf, findIndices, splitAt)
 import Data.Maybe (catMaybes)
 import Data.Monoid (Monoid, (<>), mempty, mappend, mconcat)
 import Data.String.Conversions (ST, SBS, cs)
@@ -49,7 +49,6 @@ import qualified Data.ByteString as SBS
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Vector as Vector
 import qualified Data.Yaml as Yaml
-import qualified Text.Regex.Easy as Regex
 
 
 -- * config types
@@ -497,14 +496,16 @@ popArg (h:h':t) = ((, h':t) <$> parseArgsWithEqSign h)
               <|> ((,    t) <$> parseArgsWithSpace h h')
 
 parseArgsWithEqSign :: String -> Either String (String, String)
-parseArgsWithEqSign s = case cs s Regex.=~- "^--([^=]+)=(.*)$" of
-    [_, k, v] -> Right (cs k, cs v)
-    bad -> Left $ "could not parse last arg: " ++ show (s, bad)
+parseArgsWithEqSign = f
+  where
+    f ('-':'-':t@(findIndices (== '=') -> [i])) = Right . (\(k, '=':v) -> (k, v)) $ splitAt i t
+    f s = Left $ "could not parse long-arg: " ++ show s
 
 parseArgsWithSpace :: String -> String -> Either String (String, String)
-parseArgsWithSpace s v = case cs s Regex.=~- "^--([^=]+)$" of
-    [_, k] -> Right (cs k, cs v)
-    bad -> Left $ "could not parse long-arg with value: " ++ show (s, v, bad)
+parseArgsWithSpace s v = f s
+  where
+    f ('-':'-':t) | (not . any (== '=') $ t) = Right (t, v)
+    f _ = Left $ "could not parse long-arg: " ++ show (s, v)
 
 parseArgName :: String -> String
 parseArgName = map f
