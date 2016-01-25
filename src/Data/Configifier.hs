@@ -231,7 +231,7 @@ defaultSources filePaths = do
     return $ files ++ [env] ++ readUserConfigFiles [args]
 
 -- | Require that all shell env variables start with executable name.
--- (This is just a call to 'requireShellEnvPrefix'' with the result of
+-- (This is just a call to 'withShellEnvPrefix'' with the result of
 -- 'progName'.)
 withShellEnvPrefix :: Env -> IO Env
 withShellEnvPrefix env = (`withShellEnvPrefix'` env) <$> getProgName
