@@ -117,7 +117,7 @@ data Id a = Id a
 
 data Source =
       YamlString SBS
-    | YamlFile FilePath
+    | YamlFile { yamlFileOptional :: Bool, yamlFilePath :: FilePath }
     | ShellEnv [(String, String)]
     | CommandLine [String]
   deriving (Eq, Ord, Show, Typeable)
@@ -208,7 +208,7 @@ configifyWithDefault def sources = sequence (get <$> readUserConfigFiles sources
 
     get :: Source -> IO tm
     get (YamlString sbs)     = run $ parseConfigFile sbs
-    get (YamlFile fpath)     = parseConfigFileWithIncludes fpath >>= run
+    get (YamlFile opt fpath) = parseConfigFileWithIncludes opt fpath >>= run
     get (ShellEnv env)       = run $ parseShellEnv env
     get (CommandLine args)   = run $ parseCommandLine args
 
@@ -225,7 +225,7 @@ configifyWithDefault def sources = sequence (get <$> readUserConfigFiles sources
 -- files are silently dropped.
 defaultSources :: [FilePath] -> IO [Source]
 defaultSources filePaths = do
-    files <- YamlFile   <$$> filterM doesFileExist filePaths
+    files <- YamlFile False <$$> filterM doesFileExist filePaths
     env   <- ShellEnv    <$> (getEnvironment >>= withShellEnvPrefix)
     args  <- CommandLine <$> getArgs
     return $ files ++ [env] ++ readUserConfigFiles [args]
@@ -254,14 +254,14 @@ readUserConfigFiles = mconcat . map f
   where
     f :: Source -> [Source]
     f s@(YamlString _)   = [s]
-    f s@(YamlFile _)     = [s]
+    f s@(YamlFile _ _)   = [s]
     f s@(ShellEnv _)     = [s]
     f (CommandLine args) = filter (not . (== CommandLine [])) $ g [] args
 
     g :: [String] -> [String] -> [Source]
     g acc [] = [CommandLine (reverse acc)]
     g acc fresh@(freshHead:freshTail) = case popArg fresh of
-        Right (("config", v), fresh') -> CommandLine (reverse acc) : YamlFile v : g [] fresh'
+        Right (("config", v), fresh') -> CommandLine (reverse acc) : YamlFile True v : g [] fresh'
         _ -> g (freshHead : acc) freshTail
 
 -- | Require prefix for shell env variables.  This function will chop
@@ -284,8 +284,13 @@ parseConfigFile sbs = mapLeft (InvalidYamlString (trunc sbs)) $ Yaml.decodeEithe
     trunc s = if SBS.length s > l then SBS.take l s <> "..." else s
 
 -- | See "Data.Yaml.Include".
-parseConfigFileWithIncludes :: (FromJSON (TaggedM cfg)) => FilePath -> IO (Either Error (TaggedM cfg))
-parseConfigFileWithIncludes fpath = mapLeft (InvalidYamlFile fpath) <$> decodeFileEither fpath
+parseConfigFileWithIncludes :: (Monoid (TaggedM cfg), FromJSON (TaggedM cfg)) =>
+      Bool -> FilePath -> IO (Either Error (TaggedM cfg))
+parseConfigFileWithIncludes optional fpath = f optional <$> decodeFileEither fpath
+  where
+    f _     (Right v) = Right v
+    f True  (Left _)  = Right mempty
+    f False (Left e)  = Left $ InvalidYamlFile fpath e
 
 renderConfigFile :: (Freeze cfg, t ~ Tagged cfg, ToJSON (TaggedM cfg)) => t -> SBS
 renderConfigFile = Yaml.encode . thaw

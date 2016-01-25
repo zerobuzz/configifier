@@ -209,7 +209,7 @@ selectSpec = do
 
     it "(\"l\" :> Int :*> \"l'\" :> Int)" $
         let t :: forall c . ( c ~ ToConfigCode ("l" :> Int :*> "l'" :> Int)
-                            , ToVal c '["l"] ~ Just Int  -- (redundant)
+                            , ToVal c '["l"] ~ 'Just Int  -- (redundant)
                             , ToConfig c Id ~ (Id Int :*> Id Int)  -- (redundant)
                             ) => IO ()
             t = do
@@ -223,7 +223,7 @@ selectSpec = do
 
     it "(\"l\" :> Int :*> Maybe (\"l'\" :> Int))" $
         let t :: forall c . ( c ~ ToConfigCode ("l" :> Int :*> Maybe ("l'" :> Int))
-                            , ToVal c '["l"] ~ Just Int  -- (redundant)
+                            , ToVal c '["l"] ~ 'Just Int  -- (redundant)
                             , ToConfig c Id ~ (Id Int :*> MaybeO (Id Int))  -- (redundant)
                             ) => IO ()
             t = do
@@ -357,15 +357,15 @@ sourcesSpec = describe "sources" $
 readUserConfigFilesSpec :: Spec
 readUserConfigFilesSpec = describe "readUserConfigFiles" $ do
     it "finds --config args" $
-        readUserConfigFiles [CommandLine ["--config=FILE"]] `shouldBe` [YamlFile "FILE"]
+        readUserConfigFiles [CommandLine ["--config=FILE"]] `shouldBe` [YamlFile True "FILE"]
 
     it "keeps surrounding args intact" $ do
         readUserConfigFiles [CommandLine ["1", "2", "--config=FILE", "3", "4"]] `shouldBe`
-            [CommandLine ["1", "2"], YamlFile "FILE", CommandLine ["3", "4"]]
+            [CommandLine ["1", "2"], YamlFile True "FILE", CommandLine ["3", "4"]]
         readUserConfigFiles [CommandLine ["--config=FILE", "2"]] `shouldBe`
-            [YamlFile "FILE", CommandLine ["2"]]
+            [YamlFile True "FILE", CommandLine ["2"]]
         readUserConfigFiles [CommandLine ["1", "--config=FILE"]] `shouldBe`
-            [CommandLine ["1"], YamlFile "FILE"]
+            [CommandLine ["1"], YamlFile True "FILE"]
 
 
 stringAsCharList :: Spec
