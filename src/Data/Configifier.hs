@@ -223,18 +223,15 @@ configifyWithDefault def sources = sequence (get <$> readUserConfigFiles sources
 --
 -- File path arguments are optiona; config paths to non-existent
 -- files are silently dropped.
-defaultSources :: [FilePath] -> IO [Source]
-defaultSources filePaths = do
+defaultSources' :: String -> [FilePath] -> IO [Source]
+defaultSources' progName filePaths = do
     files <- YamlFile False <$$> filterM doesFileExist filePaths
-    env   <- ShellEnv    <$> (getEnvironment >>= withShellEnvPrefix)
+    env   <- ShellEnv . withShellEnvPrefix progName <$> getEnvironment
     args  <- CommandLine <$> getArgs
     return $ files ++ [env] ++ readUserConfigFiles [args]
 
--- | Require that all shell env variables start with executable name.
--- (This is just a call to 'withShellEnvPrefix'' with the result of
--- 'progName'.)
-withShellEnvPrefix :: Env -> IO Env
-withShellEnvPrefix env = (`withShellEnvPrefix'` env) <$> getProgName
+defaultSources :: [FilePath] -> IO [Source]
+defaultSources filePaths = getProgName >>= (`defaultSources'` filePaths) . (<> "_")
 
 
 -- * corner cases
@@ -267,11 +264,11 @@ readUserConfigFiles = mconcat . map f
 -- | Require prefix for shell env variables.  This function will chop
 -- off the given prefix of all env entries, and filter all entries
 -- that do not have this prefix.
-withShellEnvPrefix' :: String -> Env -> Env
-withShellEnvPrefix' prefix = catMaybes . map f
+withShellEnvPrefix :: String -> Env -> Env
+withShellEnvPrefix prefix = catMaybes . map f
   where
     f (k, v) = if prefix `isPrefixOf` k
-        then Just (take (length prefix) k, v)
+        then Just (drop (length prefix) k, v)
         else Nothing
 
 
