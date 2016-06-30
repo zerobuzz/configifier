@@ -19,6 +19,7 @@
 {-# LANGUAGE UndecidableInstances  #-}
 {-# LANGUAGE ViewPatterns          #-}
 
+{-# OPTIONS_GHC -fno-warn-unticked-promoted-constructors -fno-warn-unused-imports -Wwarn #-}
 module Data.Configifier
 where
 
